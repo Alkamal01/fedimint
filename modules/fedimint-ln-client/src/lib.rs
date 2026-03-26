@@ -118,7 +118,7 @@ const OUTGOING_LN_CONTRACT_TIMELOCK: u64 = 500;
 
 // 24 hours. Many wallets default to 1 hour, but it's a bad user experience if
 // invoices expire too quickly
-const DEFAULT_INVOICE_EXPIRY_TIME: Duration = Duration::from_secs(60 * 60 * 24);
+const DEFAULT_INVOICE_EXPIRY_TIME: Duration = Duration::from_hours(24);
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Encodable, Decodable)]
 #[serde(rename_all = "snake_case")]
@@ -1221,7 +1221,7 @@ impl LightningClientModule {
         Fut: Future<Output = Vec<LightningGatewayAnnouncement>>,
     {
         const ABOUT_TO_EXPIRE: Duration = Duration::from_secs(30);
-        const EMPTY_GATEWAY_SLEEP: Duration = Duration::from_secs(10 * 60);
+        const EMPTY_GATEWAY_SLEEP: Duration = Duration::from_mins(10);
 
         let mut first_time = true;
 
@@ -1275,6 +1275,13 @@ impl LightningClientModule {
         invoice: Bolt11Invoice,
         extra_meta: M,
     ) -> anyhow::Result<OutgoingLightningPayment> {
+        if let Some(expires_at) = invoice.expires_at() {
+            ensure!(
+                expires_at.as_secs() > fedimint_core::time::duration_since_epoch().as_secs(),
+                "Invoice has expired"
+            );
+        }
+
         let mut dbtx = self.client_ctx.module_db().begin_transaction().await;
         let maybe_gateway_id = maybe_gateway.as_ref().map(|g| g.gateway_id);
         let prev_payment_result = self

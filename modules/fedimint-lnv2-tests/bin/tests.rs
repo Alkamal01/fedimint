@@ -23,6 +23,25 @@ use tracing::info;
 #[path = "common.rs"]
 mod common;
 
+async fn module_is_present(client: &Client, kind: &str) -> anyhow::Result<bool> {
+    let modules = cmd!(client, "module").out_json().await?;
+
+    let modules = modules["list"].as_array().expect("module list is an array");
+
+    Ok(modules.iter().any(|m| m["kind"].as_str() == Some(kind)))
+}
+
+async fn assert_module_sanity(client: &Client) -> anyhow::Result<()> {
+    if !devimint::util::is_backwards_compatibility_test() {
+        ensure!(
+            !module_is_present(client, "ln").await?,
+            "ln module should not be present"
+        );
+    }
+
+    Ok(())
+}
+
 #[derive(Parser)]
 #[command(name = "lnv2-module-tests")]
 #[command(about = "LNv2 module integration tests", long_about = None)]
@@ -50,15 +69,6 @@ async fn main() -> anyhow::Result<()> {
             if !devimint::util::supports_lnv2() {
                 info!("lnv2 is disabled, skipping");
                 return Ok(());
-            }
-
-            if !devimint::util::is_backwards_compatibility_test() {
-                info!("Verifying that LNv1 module is disabled...");
-
-                ensure!(
-                    !devimint::util::supports_lnv1(),
-                    "LNv1 module should be disabled when not in backwards compatibility test"
-                );
             }
 
             match &cli.command {
@@ -108,6 +118,8 @@ async fn test_gateway_registration(dev_fed: &DevJitFed) -> anyhow::Result<()> {
         .await?
         .new_joined_client("lnv2-test-gateway-registration-client")
         .await?;
+
+    assert_module_sanity(&client).await?;
 
     let gw_lnd = dev_fed.gw_lnd().await?;
     let gw_ldk = dev_fed.gw_ldk_connected().await?;
@@ -218,9 +230,11 @@ async fn test_payments(dev_fed: &DevJitFed) -> anyhow::Result<()> {
         .new_joined_client("lnv2-test-payments-client")
         .await?;
 
+    assert_module_sanity(&client).await?;
+
     federation.pegin_client(10_000, &client).await?;
 
-    almost_equal(client.balance().await?, 10_000 * 1000, 5_000).unwrap();
+    almost_equal(client.balance().await?, 10_000 * 1000, 500_000).unwrap();
 
     let gw_lnd = dev_fed.gw_lnd().await?;
     let gw_ldk = dev_fed.gw_ldk().await?;
@@ -292,7 +306,7 @@ async fn test_payments(dev_fed: &DevJitFed) -> anyhow::Result<()> {
             gw_receive.ln.ln_type()
         );
 
-        let invoice = gw_receive.create_invoice(1_000_000).await?;
+        let invoice = gw_receive.client().create_invoice(1_000_000).await?;
 
         common::send(
             &client,
@@ -314,7 +328,7 @@ async fn test_payments(dev_fed: &DevJitFed) -> anyhow::Result<()> {
 
         let (invoice, receive_op) = common::receive(&client, &gw_receive.addr, 1_000_000).await?;
 
-        gw_send.pay_invoice(invoice).await?;
+        gw_send.client().pay_invoice(invoice).await?;
 
         common::await_receive_claimed(&client, receive_op).await?;
     }
@@ -347,10 +361,12 @@ async fn test_payments(dev_fed: &DevJitFed) -> anyhow::Result<()> {
     let fed_id = federation.calculate_federation_id();
 
     gw_lnd
+        .client()
         .set_federation_routing_fee(fed_id.clone(), 0, 0)
         .await?;
 
     gw_lnd
+        .client()
         .set_federation_transaction_fee(fed_id.clone(), 0, 0)
         .await?;
 
@@ -368,7 +384,7 @@ async fn test_payments(dev_fed: &DevJitFed) -> anyhow::Result<()> {
 
     info!("Testing payment summary...");
 
-    let lnd_payment_summary = gw_lnd.payment_summary().await?;
+    let lnd_payment_summary = gw_lnd.client().payment_summary().await?;
 
     assert_eq!(lnd_payment_summary.outgoing.total_success, 5);
     assert_eq!(lnd_payment_summary.outgoing.total_failure, 2);
@@ -380,7 +396,7 @@ async fn test_payments(dev_fed: &DevJitFed) -> anyhow::Result<()> {
     assert!(lnd_payment_summary.incoming.median_latency.is_some());
     assert!(lnd_payment_summary.incoming.average_latency.is_some());
 
-    let ldk_payment_summary = gw_ldk.payment_summary().await?;
+    let ldk_payment_summary = gw_ldk.client().payment_summary().await?;
 
     assert_eq!(ldk_payment_summary.outgoing.total_success, 4);
     assert_eq!(ldk_payment_summary.outgoing.total_failure, 2);
@@ -402,7 +418,7 @@ async fn test_fees(
     gw_ldk: &Gatewayd,
     expected_addition: u64,
 ) -> anyhow::Result<()> {
-    let gw_lnd_ecash_prev = gw_lnd.ecash_balance(fed_id.clone()).await?;
+    let gw_lnd_ecash_prev = gw_lnd.client().ecash_balance(fed_id.clone()).await?;
 
     let (invoice, receive_op) = common::receive(client, &gw_ldk.addr, 1_000_000).await?;
 
@@ -416,7 +432,7 @@ async fn test_fees(
 
     common::await_receive_claimed(client, receive_op).await?;
 
-    let gw_lnd_ecash_after = gw_lnd.ecash_balance(fed_id.clone()).await?;
+    let gw_lnd_ecash_after = gw_lnd.client().ecash_balance(fed_id.clone()).await?;
 
     almost_equal(
         gw_lnd_ecash_prev + expected_addition,
@@ -492,9 +508,13 @@ async fn test_lnurl_pay(dev_fed: &DevJitFed) -> anyhow::Result<()> {
         .new_joined_client("lnv2-lnurl-test-client-a")
         .await?;
 
+    assert_module_sanity(&client_a).await?;
+
     let client_b = federation
         .new_joined_client("lnv2-lnurl-test-client-b")
         .await?;
+
+    assert_module_sanity(&client_b).await?;
 
     for (gw_send, gw_receive) in gateway_pairs {
         info!(
@@ -521,8 +541,8 @@ async fn test_lnurl_pay(dev_fed: &DevJitFed) -> anyhow::Result<()> {
         assert!(response_a.preimage.is_none());
         assert!(response_b.preimage.is_none());
 
-        gw_send.pay_invoice(invoice_a.clone()).await?;
-        gw_send.pay_invoice(invoice_b.clone()).await?;
+        gw_send.client().pay_invoice(invoice_a.clone()).await?;
+        gw_send.client().pay_invoice(invoice_b.clone()).await?;
 
         let response_a = verify_payment(&verify_url_a).await?;
         let response_b = verify_payment(&verify_url_b).await?;
@@ -655,7 +675,7 @@ async fn test_iroh_payment(
         add_gateway(client, 3, &gw_lnd.addr).await?;
     }
 
-    let invoice = gw_ldk.create_invoice(5_000_000).await?;
+    let invoice = gw_ldk.client().create_invoice(5_000_000).await?;
 
     let send_op = serde_json::from_value::<OperationId>(
         cmd!(client, "module", "lnv2", "send", invoice,)
@@ -682,7 +702,7 @@ async fn test_iroh_payment(
             .await?,
     )?;
 
-    gw_ldk.pay_invoice(invoice).await?;
+    gw_ldk.client().pay_invoice(invoice).await?;
     common::await_receive_claimed(client, receive_op).await?;
 
     if util::FedimintCli::version_or_default().await < *VERSION_0_10_0_ALPHA

@@ -168,6 +168,7 @@ impl ConsensusApi {
         &self,
         txid: TransactionId,
     ) -> (Vec<ModuleInstanceId>, DatabaseTransaction<'_, Committable>) {
+        debug!(target: LOG_NET_API, %txid, "Awaiting transaction acceptance");
         self.db
             .wait_key_check(&AcceptedTransactionKey(txid), std::convert::identity)
             .await
@@ -177,6 +178,7 @@ impl ConsensusApi {
         &self,
         outpoint: OutPoint,
     ) -> Result<SerdeModuleEncoding<DynOutputOutcome>> {
+        debug!(target: LOG_NET_API, %outpoint, "Awaiting output outcome");
         let (module_ids, mut dbtx) = self.await_transaction(outpoint.txid).await;
 
         let module_id = module_ids
@@ -679,7 +681,10 @@ impl HasApiContext<ConsensusApi> for ConsensusApi {
             self,
             ApiEndpointContext::new(
                 db,
-                request.auth == Some(self.cfg.private.api_auth.clone()),
+                request
+                    .auth
+                    .as_ref()
+                    .is_some_and(|auth| self.cfg.private.api_auth.verify(auth.as_str())),
                 request.auth.clone(),
             ),
         )
@@ -798,8 +803,8 @@ impl IDashboardApi for ConsensusApi {
         current_password: &str,
         guardian_auth: &GuardianAuthToken,
     ) -> Result<(), String> {
-        let auth = &self.auth().await.0;
-        if auth != current_password {
+        let auth = self.auth().await;
+        if !auth.verify(current_password) {
             return Err("Current password is incorrect".into());
         }
         self.change_guardian_password(new_password, guardian_auth)
@@ -988,7 +993,7 @@ pub fn server_endpoints() -> Vec<ApiEndpoint<ConsensusApi>> {
             ApiVersion::new(0, 2),
             async |fedimint: &ConsensusApi, context, _v: ()| -> GuardianConfigBackup {
                 let auth = check_auth(context)?;
-                let password = context.request_auth().expect("Auth was checked before").0;
+                let password = context.request_auth().expect("Auth was checked before").as_str().to_string();
                 Ok(fedimint.get_guardian_config_backup(&password, &auth))
             }
         },

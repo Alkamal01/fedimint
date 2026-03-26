@@ -57,6 +57,18 @@ impl<H: BitcoinHash> Hkdf<H> {
         Hkdf { prk }
     }
 
+    /// Construct the HKDF from serialized PRK bytes.
+    pub fn from_prk_bytes(prk: H::Bytes) -> Self {
+        Hkdf {
+            prk: Hmac::from_byte_array(prk),
+        }
+    }
+
+    /// Serialize the PRK bytes backing this HKDF instance.
+    pub fn to_prk_bytes(&self) -> H::Bytes {
+        self.prk.to_byte_array()
+    }
+
     /// Run HKDF-expand to generate new key material
     ///
     /// ## Inputs
@@ -69,7 +81,7 @@ impl<H: BitcoinHash> Hkdf<H> {
     /// If `LEN > H::LEN * 255`.
     pub fn derive<const LEN: usize>(&self, info: &[u8]) -> [u8; LEN] {
         // TODO: make const once rust allows
-        let iterations = if LEN % H::LEN == 0 {
+        let iterations = if LEN.is_multiple_of(H::LEN) {
             LEN / H::LEN
         } else {
             LEN / H::LEN + 1

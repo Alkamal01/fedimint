@@ -34,6 +34,8 @@ pub(crate) struct SetupInput {
     #[serde(default)]
     pub is_lead: bool,
     pub federation_name: String,
+    #[serde(default)]
+    pub federation_size: String,
     #[serde(default)] // will not be sent if disabled
     pub enable_base_fees: bool,
     #[serde(default)] // list of enabled module kinds
@@ -83,9 +85,11 @@ async fn setup_form(State(state): State<UiState<DynSetupApi>>) -> impl IntoRespo
     }
 
     let available_modules = state.api.available_modules();
+    let default_modules = state.api.default_modules();
 
     let content = html! {
-        form method="post" action=(ROOT_ROUTE) {
+        form method="post" action=(ROOT_ROUTE)
+            hx-post=(ROOT_ROUTE) hx-target="#setup-error" hx-swap="innerHTML" {
             style {
                 r#"
                 .toggle-content {
@@ -149,6 +153,17 @@ async fn setup_form(State(state): State<UiState<DynSetupApi>>) -> impl IntoRespo
                 div class="toggle-content mt-3" {
                     input type="text" class="form-control" id="federation_name" name="federation_name" placeholder="Federation Name";
 
+                    div class="form-group mt-3" {
+                        label class="form-label" for="federation_size" {
+                            "Total number of guardians (including you)"
+                        }
+                        input type="number" class="form-control" id="federation_size"
+                            name="federation_size" min="1" max="19";
+                        small class="form-text text-muted" {
+                            "At least 4, or 1. Recommended: 4, 7, 10, 13."
+                        }
+                    }
+
                     div class="form-check mt-3" {
                         input type="checkbox" class="form-check-input" id="enable_base_fees" name="enable_base_fees" checked value="true";
 
@@ -180,10 +195,13 @@ async fn setup_form(State(state): State<UiState<DynSetupApi>>) -> impl IntoRespo
                                                     id=(format!("module_{}", kind.as_str()))
                                                     name="enabled_modules"
                                                     value=(kind.as_str())
-                                                    checked;
+                                                    checked[default_modules.contains(kind)];
 
                                                 label class="form-check-label" for=(format!("module_{}", kind.as_str())) {
                                                     (kind.as_str())
+                                                    @if !default_modules.contains(kind) {
+                                                        span class="badge bg-warning text-dark ms-2" { "experimental" }
+                                                    }
                                                 }
                                             }
                                         }
@@ -198,6 +216,8 @@ async fn setup_form(State(state): State<UiState<DynSetupApi>>) -> impl IntoRespo
                     }
                 }
             }
+
+            div id="setup-error" {}
 
             div class="button-container" {
                 button type="submit" class="btn btn-primary setup-btn" { "Confirm" }
@@ -238,28 +258,48 @@ async fn setup_submit(
         None
     };
 
+    let federation_size = if input.is_lead {
+        let s = input.federation_size.trim();
+        if s.is_empty() {
+            None
+        } else {
+            match s.parse::<u32>() {
+                Ok(size) => Some(size),
+                Err(_) => {
+                    return Html(
+                        html! {
+                            div class="alert alert-danger" { "Invalid federation size" }
+                        }
+                        .into_string(),
+                    )
+                    .into_response();
+                }
+            }
+        }
+    } else {
+        None
+    };
+
     match state
         .api
         .set_local_parameters(
-            ApiAuth(input.password),
+            ApiAuth::new(input.password),
             input.name,
             federation_name,
             disable_base_fees,
             enabled_modules,
+            federation_size,
         )
         .await
     {
-        Ok(_) => Redirect::to(LOGIN_ROUTE).into_response(),
-        Err(e) => {
-            let content = html! {
+        Ok(_) => ([("HX-Redirect", LOGIN_ROUTE)], Html(String::new())).into_response(),
+        Err(e) => Html(
+            html! {
                 div class="alert alert-danger" { (e.to_string()) }
-                div class="button-container" {
-                    a href=(ROOT_ROUTE) class="btn btn-primary setup-btn" { "Return to Setup" }
-                }
-            };
-
-            Html(setup_layout("Setup Error", content).into_string()).into_response()
-        }
+            }
+            .into_string(),
+        )
+        .into_response(),
     }
 }
 
@@ -305,8 +345,60 @@ async fn federation_setup(
         .expect("Successful authentication ensures that the local parameters have been set");
 
     let connected_peers = state.api.connected_peers().await;
+    let guardian_name = state.api.guardian_name().await;
+    let federation_size = state.api.federation_size().await;
+    let cfg_federation_name = state.api.cfg_federation_name().await;
+    let cfg_base_fees_disabled = state.api.cfg_base_fees_disabled().await;
+    let cfg_enabled_modules = state.api.cfg_enabled_modules().await;
+    let total_guardians = connected_peers.len() + 1;
+    let can_start_dkg = federation_size
+        .map(|expected| total_guardians == expected as usize)
+        .unwrap_or(false);
 
     let content = html! {
+        @if let Some(ref name) = guardian_name {
+            section class="mb-4" {
+                h4 { "Your name" }
+                p { (name) }
+            }
+        }
+
+        section class="mb-4" {
+            h4 { "Federation settings" }
+            @if cfg_federation_name.is_some() || federation_size.is_some() || cfg_base_fees_disabled.is_some() || cfg_enabled_modules.is_some() {
+                ul class="list-group list-group-flush" {
+                    @if let Some(ref name) = cfg_federation_name {
+                        li class="list-group-item" {
+                            strong { "Federation name: " }
+                            (name)
+                        }
+                    }
+                    @if let Some(size) = federation_size {
+                        li class="list-group-item" {
+                            strong { "Federation size: " }
+                            (size)
+                        }
+                    }
+                    @if let Some(disabled) = cfg_base_fees_disabled {
+                        li class="list-group-item" {
+                            strong { "Base fees: " }
+                            @if disabled { "disabled" } @else { "enabled" }
+                        }
+                    }
+                    @if let Some(ref modules) = cfg_enabled_modules {
+                        li class="list-group-item" {
+                            strong { "Enabled modules: " }
+                            (modules.iter().map(|m| m.as_str().to_owned()).collect::<Vec<_>>().join(", "))
+                        }
+                    }
+                }
+            } @else {
+                p class="text-muted" { "Leader's setup code not provided yet." }
+            }
+        }
+
+        hr class="my-4" {}
+
         section class="mb-4" {
             h4 { "Your setup code" }
 
@@ -345,7 +437,11 @@ async fn federation_setup(
         section class="mb-4" {
             h4 { "Other guardians" }
 
-            p { "Add setup code of every other guardian." }
+            @if let Some(expected) = federation_size {
+                p { (format!("{total_guardians} of {expected} guardians connected.")) }
+            } @else {
+                p { "Add setup code of every other guardian." }
+            }
 
             ul class="list-group mb-4" {
                 @for peer in connected_peers {
@@ -366,13 +462,16 @@ async fn federation_setup(
 
                 div class="row mt-3" {
                     div class="col-6" {
-                        button type="button" class="btn btn-warning w-100" onclick="document.getElementById('reset-form').submit();" {
+                        button type="button" class="btn btn-warning w-100" onclick="if(confirm('Are you sure you want to reset all guardians?')){document.getElementById('reset-form').submit();}" {
                             "Reset Guardians"
                         }
                     }
 
                     div class="col-6" {
-                        button type="submit" class="btn btn-primary w-100" { "Add Guardian" }
+                        button type="submit" class="btn btn-primary w-100"
+                            disabled[can_start_dkg] {
+                            @if can_start_dkg { "List complete" } @else { "Add Guardian" }
+                        }
                     }
                 }
             }
@@ -389,8 +488,20 @@ async fn federation_setup(
 
             div class="text-center" {
                 form method="post" action=(START_DKG_ROUTE) {
-                    button type="submit" class="btn btn-warning setup-btn" {
+                    button type="submit" class="btn btn-warning setup-btn"
+                        disabled[!can_start_dkg] {
                         "🚀 Confirm"
+                    }
+                }
+                @if !can_start_dkg {
+                    @if let Some(expected) = federation_size {
+                        p class="text-muted mt-2" style="font-size: 0.875rem;" {
+                            (format!("Need to collect {} more setup code(s).", expected as usize - total_guardians))
+                        }
+                    } @else {
+                        p class="text-muted mt-2" style="font-size: 0.875rem;" {
+                            "Need to collect the setup codes from all other guardians."
+                        }
                     }
                 }
             }
@@ -522,6 +633,8 @@ async fn post_start_dkg(
     State(state): State<UiState<DynSetupApi>>,
     _auth: UserAuth,
 ) -> impl IntoResponse {
+    let our_connection_info = state.api.setup_code().await;
+
     match state.api.start_dkg().await {
         Ok(()) => {
             // Show DKG progress page with htmx polling
@@ -532,6 +645,23 @@ async fn post_start_dkg(
 
                 p class="text-center" {
                     "All guardians need to confirm their settings. Once completed you will be redirected to the Dashboard."
+                }
+
+                @if let Some(ref info) = our_connection_info {
+                    hr class="my-4" {}
+                    section class="mb-4" {
+                        h4 { "Your setup code" }
+                        p { "Share with guardians who still need it." }
+                        div class="alert alert-info mb-3" {
+                            (info)
+                        }
+                        div class="text-center" {
+                            button type="button" class="btn btn-outline-primary setup-btn"
+                                onclick=(format!("navigator.clipboard.writeText('{info}')")) {
+                                "Copy to Clipboard"
+                            }
+                        }
+                    }
                 }
 
                 // Hidden div that will poll and redirect when the normal UI is ready

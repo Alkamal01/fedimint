@@ -11,14 +11,12 @@ use envs::{
     FM_LDK_ALIAS_ENV, FM_LND_MACAROON_ENV, FM_LND_RPC_ADDR_ENV, FM_LND_TLS_CERT_ENV, FM_PORT_LDK,
 };
 use fedimint_core::config::{FederationId, JsonClientConfig};
-use fedimint_core::core::OperationId;
 use fedimint_core::encoding::{Decodable, Encodable};
 use fedimint_core::invite_code::InviteCode;
 use fedimint_core::util::{SafeUrl, get_average, get_median};
 use fedimint_core::{Amount, BitcoinAmountOrAll, secp256k1};
 use fedimint_eventlog::{EventKind, EventLogId, PersistedLogEntry, StructuredPaymentEvents};
 use fedimint_lnv2_common::gateway_api::PaymentFee;
-use fedimint_mint_client::OOBNotes;
 use fedimint_wallet_client::PegOutFees;
 use lightning_invoice::Bolt11Invoice;
 use serde::{Deserialize, Serialize};
@@ -44,17 +42,20 @@ pub const LIST_CHANNELS_ENDPOINT: &str = "/list_channels";
 pub const LIST_TRANSACTIONS_ENDPOINT: &str = "/list_transactions";
 pub const MNEMONIC_ENDPOINT: &str = "/mnemonic";
 pub const OPEN_CHANNEL_ENDPOINT: &str = "/open_channel";
+pub const OPEN_CHANNEL_WITH_PUSH_ENDPOINT: &str = "/open_channel_with_push";
 pub const CLOSE_CHANNELS_WITH_PEER_ENDPOINT: &str = "/close_channels_with_peer";
 pub const PAY_INVOICE_FOR_OPERATOR_ENDPOINT: &str = "/pay_invoice_for_operator";
 pub const PAY_OFFER_FOR_OPERATOR_ENDPOINT: &str = "/pay_offer_for_operator";
 pub const PAYMENT_LOG_ENDPOINT: &str = "/payment_log";
 pub const PAYMENT_SUMMARY_ENDPOINT: &str = "/payment_summary";
+pub const PEGIN_FROM_ONCHAIN_ENDPOINT: &str = "/pegin_from_onchain";
 pub const RECEIVE_ECASH_ENDPOINT: &str = "/receive_ecash";
 pub const SET_FEES_ENDPOINT: &str = "/set_fees";
 pub const STOP_ENDPOINT: &str = "/stop";
 pub const SEND_ONCHAIN_ENDPOINT: &str = "/send_onchain";
 pub const SPEND_ECASH_ENDPOINT: &str = "/spend_ecash";
 pub const WITHDRAW_ENDPOINT: &str = "/withdraw";
+pub const WITHDRAW_TO_ONCHAIN_ENDPOINT: &str = "/withdraw_to_onchain";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ConnectFedPayload {
@@ -87,6 +88,13 @@ pub struct DepositAddressPayload {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PeginFromOnchainPayload {
+    pub federation_id: FederationId,
+    pub amount: BitcoinAmountOrAll,
+    pub fee_rate_sats_per_vbyte: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DepositAddressRecheckPayload {
     pub address: Address<NetworkUnchecked>,
     pub federation_id: FederationId,
@@ -101,6 +109,12 @@ pub struct WithdrawPayload {
     /// When None, fetches current fees from the wallet.
     #[serde(default)]
     pub quoted_fees: Option<PegOutFees>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WithdrawToOnchainPayload {
+    pub federation_id: FederationId,
+    pub amount: BitcoinAmountOrAll,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -206,34 +220,18 @@ pub struct SpendEcashPayload {
     pub federation_id: FederationId,
     /// The amount of e-cash to spend
     pub amount: Amount,
-    /// If the exact amount cannot be represented, return e-cash of a higher
-    /// value instead of failing
-    #[serde(default)]
-    pub allow_overpay: bool,
-    /// After how many seconds we will try to reclaim the e-cash if it
-    /// hasn't been redeemed by the recipient. Defaults to one week.
-    #[serde(default = "default_timeout")]
-    pub timeout: u64,
-    /// If the necessary information to join the federation the e-cash
-    /// belongs to should be included in the serialized notes
-    #[serde(default)]
-    pub include_invite: bool,
-}
-
-/// Default timeout for e-cash redemption of one week in seconds
-fn default_timeout() -> u64 {
-    604_800
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SpendEcashResponse {
-    pub operation_id: OperationId,
-    pub notes: OOBNotes,
+    /// OOBNotes.to_string() for v1, base32::encode_prefixed() for v2
+    pub notes: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ReceiveEcashPayload {
-    pub notes: OOBNotes,
+    /// Can be OOBNotes (v1) or ECash (v2)
+    pub notes: String,
     #[serde(default)]
     pub wait: bool,
 }
@@ -326,6 +324,8 @@ pub struct ChannelInfo {
     pub is_active: bool,
     pub funding_outpoint: Option<OutPoint>,
     pub remote_node_alias: Option<String>,
+    #[serde(default)]
+    pub remote_address: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

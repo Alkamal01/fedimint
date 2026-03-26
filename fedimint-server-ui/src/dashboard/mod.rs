@@ -23,9 +23,12 @@ use fedimint_ui_common::{
     dashboard_layout, login_form_response,
 };
 use maud::html;
-use {fedimint_lnv2_server, fedimint_meta_server, fedimint_wallet_server};
+use {
+    fedimint_lnv2_server, fedimint_meta_server, fedimint_mintv2_server, fedimint_wallet_server,
+    fedimint_walletv2_server,
+};
 
-use crate::dashboard::modules::{lnv2, meta, wallet};
+use crate::dashboard::modules::{lnv2, meta, mintv2, wallet, walletv2};
 use crate::{
     CHANGE_PASSWORD_ROUTE, DOWNLOAD_BACKUP_ROUTE, EXPLORER_IDX_ROUTE, EXPLORER_ROUTE, LoginInput,
     METRICS_ROUTE, login_submit_response,
@@ -60,7 +63,7 @@ async fn download_backup(
     let api_auth = state.api.auth().await;
     let backup = state
         .api
-        .download_guardian_config_backup(&api_auth.0, &user_auth.guardian_auth_token)
+        .download_guardian_config_backup(api_auth.as_str(), &user_auth.guardian_auth_token)
         .await;
     let filename = "guardian-backup.tar";
 
@@ -103,7 +106,7 @@ async fn change_password(
     let api_auth = state.api.auth().await;
 
     // Verify current password
-    if api_auth.0 != input.current_password {
+    if !api_auth.verify(&input.current_password) {
         let content = html! {
             div class="alert alert-danger" { "Current password is incorrect" }
             div class="button-container" {
@@ -225,6 +228,20 @@ async fn dashboard_view(
             div class="row gy-4 mt-2" {
                 div class="col-12" {
                     (lnv2::render(lightning).await)
+                }
+            }
+        }
+
+        // Conditionally add Wallet V2 UI if the module is available
+        @if let Some(walletv2_module) = state.api.get_module::<fedimint_walletv2_server::Wallet>() {
+            (walletv2::render(walletv2_module).await)
+        }
+
+        // Conditionally add Mint V2 UI if the module is available
+        @if let Some(mint_module) = state.api.get_module::<fedimint_mintv2_server::Mint>() {
+            div class="row gy-4 mt-2" {
+                div class="col-12" {
+                    (mintv2::render(mint_module).await)
                 }
             }
         }

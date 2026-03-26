@@ -220,6 +220,8 @@ pub struct ConfigGenSettings {
     pub network: bitcoin::Network,
     /// Available modules that can be enabled during setup
     pub available_modules: BTreeSet<ModuleKind>,
+    /// Modules that should be enabled by default in the setup UI
+    pub default_modules: BTreeSet<ModuleKind>,
 }
 
 #[derive(Debug, Clone)]
@@ -755,7 +757,7 @@ impl ServerConfig {
                 .local
                 .p2p_endpoints
                 .iter()
-                .map(|(id, endpoint)| (*id, endpoint.name.to_string()))
+                .map(|(id, endpoint)| (*id, endpoint.name.clone()))
                 .collect(),
         }
     }

@@ -150,7 +150,10 @@ devimint-env-pre-dkg *PARAMS:
   @>&2 echo "fedimint-1 UI: http://localhost:2006"
   @>&2 echo "fedimint-2 UI: http://localhost:2010"
   @>&2 echo "fedimint-3 UI: http://localhost:2014"
-  env FM_FEDERATIONS_BASE_PORT=2000 FM_PRE_DKG=true ./scripts/dev/devimint-env.sh {{PARAMS}}
+  @>&2 echo "gateway LND UI: http://localhost:8173"
+  @>&2 echo "gateway LDK UI: http://localhost:8175"
+  @>&2 echo "gateway LDK2 UI: http://localhost:8177"
+  env FM_FEDERATIONS_BASE_PORT=2000 FM_GATEWAY_BASE_PORT=8170 FM_PRE_DKG=true ./scripts/dev/devimint-env.sh {{PARAMS}}
 
 # Spawn devimint post-dkg on fixed port numbers (useful for UI work)
 devimint-env-post-dkg *PARAMS:
@@ -158,7 +161,10 @@ devimint-env-post-dkg *PARAMS:
   @>&2 echo "fedimint-1 UI: http://localhost:2006"
   @>&2 echo "fedimint-2 UI: http://localhost:2010"
   @>&2 echo "fedimint-3 UI: http://localhost:2014"
-  env FM_FEDERATIONS_BASE_PORT=2000 ./scripts/dev/devimint-env.sh {{PARAMS}}
+  @>&2 echo "gateway LND UI: http://localhost:8173"
+  @>&2 echo "gateway LDK UI: http://localhost:8175"
+  @>&2 echo "gateway LDK2 UI: http://localhost:8177"
+  env FM_FEDERATIONS_BASE_PORT=2000 FM_GATEWAY_BASE_PORT=8170 ./scripts/dev/devimint-env.sh {{PARAMS}}
 
 devimint-env-tmux *PARAMS:
   ./scripts/dev/tmuxinator/run.sh {{PARAMS}}
@@ -276,6 +282,40 @@ docs: build-docs
 # ex: `just bump-version 0.5.0-alpha 0.5.0-rc.0`
 bump-version FROM_VERSION TO_VERSION:
   find . -name 'Cargo.toml' -exec sed -i 's/{{FROM_VERSION}}/{{TO_VERSION}}/g' {} +
+  just bump-start9-version {{TO_VERSION}}
+
+# Bump Start9 package version (Dockerfile, manifest.yaml, migrations.ts)
+# ex: `just bump-start9-version 0.10.0`
+bump-start9-version TO_VERSION:
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  # Dockerfile image tag
+  sed -i 's|FROM fedimint/fedimintd:v.*|FROM fedimint/fedimintd:v{{TO_VERSION}}|' fedimint-startos/Dockerfile
+
+  # Manifest version and release-notes link
+  sed -i 's/^version: .*/version: {{TO_VERSION}}/' fedimint-startos/manifest.yaml
+  sed -i 's|releases/tag/v.*)|releases/tag/v{{TO_VERSION}})|' fedimint-startos/manifest.yaml
+
+  # Update the target version in migrations.ts. Python is used here because
+  # the version to replace is always the last quoted version string in the
+  # file, which is hard to express readably in sed or awk
+  nix shell nixpkgs#python3 -c python3 << 'PYTHON'
+  import re
+
+  path = "fedimint-startos/scripts/procedures/migrations.ts"
+  content = open(path).read()
+
+  # Match quoted version strings like "0.10.0", "0.10.0.1", "0.10.0-beta.3"
+  version_pattern = r'"(\d+\.\d+\.\d+[^"]*?)"'
+  matches = list(re.finditer(version_pattern, content))
+  assert matches, f"No version strings found in {path}"
+
+  # Replace only the last match (always the fromMapping target version)
+  last = matches[-1]
+  content = content[:last.start()] + '"{{TO_VERSION}}"' + content[last.end():]
+  open(path, "w").write(content)
+  PYTHON
 
 publish-release:
   # We need to add CARGO_PROFILE_DEV_OPT_LEVEL because jemalloc fails to compile on our toolchain without optimizations enabled

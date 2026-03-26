@@ -18,8 +18,8 @@ use tracing::{debug, error, info, trace, warn};
 use crate::devfed::DevJitFed;
 use crate::envs::{
     FM_DEVIMINT_STATIC_DATA_DIR_ENV, FM_FED_SIZE_ENV, FM_FEDERATIONS_BASE_PORT_ENV,
-    FM_INVITE_CODE_ENV, FM_LINK_TEST_DIR_ENV, FM_NUM_FEDS_ENV, FM_OFFLINE_NODES_ENV,
-    FM_PRE_DKG_ENV, FM_TEST_DIR_ENV,
+    FM_GATEWAY_BASE_PORT_ENV, FM_INVITE_CODE_ENV, FM_LINK_TEST_DIR_ENV, FM_NUM_FEDS_ENV,
+    FM_OFFLINE_NODES_ENV, FM_PRE_DKG_ENV, FM_TEST_DIR_ENV,
 };
 use crate::util::{ProcessManager, poll};
 use crate::vars::mkdir;
@@ -70,6 +70,10 @@ pub struct CommonArgs {
     /// Force a base federations port, e.g. for convenience during dev tasks
     #[clap(long, env = FM_FEDERATIONS_BASE_PORT_ENV)]
     pub federations_base_port: Option<u16>,
+
+    /// Force a base gateway port, e.g. for convenience during dev tasks
+    #[clap(long, env = FM_GATEWAY_BASE_PORT_ENV)]
+    pub gateway_base_port: Option<u16>,
 }
 
 impl CommonArgs {
@@ -153,6 +157,7 @@ pub async fn setup(arg: CommonArgs) -> Result<(ProcessManager, TaskGroup)> {
         arg.fed_size,
         arg.offline_nodes,
         arg.federations_base_port,
+        arg.gateway_base_port,
     )
     .await?;
 
@@ -294,6 +299,7 @@ pub async fn handle_command(cmd: Cmd, common_args: CommonArgs) -> Result<()> {
                                 let address = dev_fed
                                     .gw_lnd_registered()
                                     .await?
+                                    .client()
                                     .get_pegin_addr(&dev_fed.fed().await?.calculate_federation_id())
                                     .await?;
                                 debug!(
@@ -312,6 +318,7 @@ pub async fn handle_command(cmd: Cmd, common_args: CommonArgs) -> Result<()> {
                                 if crate::util::supports_lnv2() {
                                     let gw_ldk = dev_fed.gw_ldk_connected().await?;
                                     let address = gw_ldk
+                                        .client()
                                         .get_pegin_addr(
                                             &dev_fed.fed().await?.calculate_federation_id(),
                                         )
@@ -334,11 +341,19 @@ pub async fn handle_command(cmd: Cmd, common_args: CommonArgs) -> Result<()> {
                         )?;
 
                         dev_fed.bitcoind().await?.mine_blocks_no_wait(11).await?;
-                        dev_fed
-                            .internal_client()
-                            .await?
-                            .await_deposit(&operation_id)
-                            .await?;
+                        if crate::util::supports_wallet_v2() {
+                            dev_fed
+                                .internal_client()
+                                .await?
+                                .await_balance(CLIENT_PEGIN_AMOUNT * 1000 * 9 / 10)
+                                .await?;
+                        } else {
+                            dev_fed
+                                .internal_client()
+                                .await?
+                                .await_deposit(&operation_id)
+                                .await?;
+                        }
 
                         info!(
                             target: LOG_DEVIMINT,

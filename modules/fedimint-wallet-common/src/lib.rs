@@ -21,7 +21,6 @@ use impl_tools::autoimpl;
 use miniscript::Descriptor;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::error;
 
 use crate::keys::CompressedPublicKey;
 use crate::txoproof::{PegInProof, PegInProofError};
@@ -244,6 +243,13 @@ impl PegOutFees {
             fee_rate: Feerate { sats_per_kvb },
             total_weight,
         }
+    }
+
+    /// Creates a `PegOutFees` from a flat fee amount. Uses weight=4000
+    /// so that `amount()` returns the exact flat fee:
+    /// `(4000 / 4) * sats / 1000 = sats`
+    pub fn from_amount(amount: bitcoin::Amount) -> Self {
+        PegOutFees::new(amount.to_sat(), 4000)
     }
 
     pub fn amount(&self) -> Amount {

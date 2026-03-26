@@ -8,6 +8,7 @@ use axum::extract::{Path, State};
 use axum::response::{Html, IntoResponse};
 use bitcoin::Address;
 use bitcoin::address::NetworkUnchecked;
+use fedimint_core::base32::{self, FEDIMINT_PREFIX};
 use fedimint_core::config::FederationId;
 use fedimint_core::invite_code::InviteCode;
 use fedimint_core::{Amount, BitcoinAmountOrAll, PeerId, TieredCounts};
@@ -75,6 +76,68 @@ pub fn scripts() -> Markup {
                     new bootstrap.Tooltip(el);
                 });
             });
+
+            // Format amount based on selected unit
+            function formatAmount(msats, unit) {
+                if (unit === 'btc') {
+                    const btc = msats / 100000000000;
+                    return btc.toFixed(8) + ' BTC';
+                } else if (unit === 'sats') {
+                    const sats = msats / 1000;
+                    if (Number.isInteger(sats)) {
+                        return sats.toLocaleString() + ' sats';
+                    }
+                    return sats.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 3}) + ' sats';
+                } else {
+                    return msats.toLocaleString() + ' msats';
+                }
+            }
+
+            // Update all amount displays within a federation card
+            function updateAmounts(fedId, unit) {
+                const card = document.getElementById('fed-card-' + fedId);
+                if (!card) return;
+
+                card.querySelectorAll('[data-msats]').forEach(function(el) {
+                    const msats = parseInt(el.getAttribute('data-msats'), 10);
+                    const display = el.querySelector('.amount-display');
+                    if (display) {
+                        display.textContent = formatAmount(msats, unit);
+                    }
+                });
+            }
+
+            // Get currently selected unit for a federation
+            function getSelectedUnit(fedId) {
+                const checked = document.querySelector('input[name="unit-' + fedId + '"]:checked');
+                if (checked) {
+                    return checked.value;
+                }
+                return 'btc';
+            }
+
+            // Initialize unit toggle listeners
+            document.addEventListener('DOMContentLoaded', function() {
+                document.querySelectorAll('.unit-toggle').forEach(function(toggle) {
+                    const fedId = toggle.getAttribute('data-fed-id');
+                    toggle.querySelectorAll('input[type="radio"]').forEach(function(radio) {
+                        radio.addEventListener('change', function(e) {
+                            updateAmounts(fedId, e.target.value);
+                        });
+                    });
+                });
+            });
+
+            // Re-apply unit formatting after HTMX swaps
+            document.addEventListener('htmx:afterSwap', function(evt) {
+                // Find the federation card this swap belongs to
+                const card = evt.target.closest('[id^="fed-card-"]');
+                if (card) {
+                    const fedId = card.id.replace('fed-card-', '');
+                    const unit = getSelectedUnit(fedId);
+                    updateAmounts(fedId, unit);
+                }
+            });
             "#))
         }
     )
@@ -97,25 +160,42 @@ pub fn render<E: Display>(
             .unwrap_or("Never".to_string());
 
 
+        @let fed_id_str = fed.federation_id.to_string();
+        @let btc_value = fed.balance_msat.msats as f64 / 100_000_000_000.0;
+
         div class="row gy-4 mt-2" {
             div class="col-12" {
-                div class="card h-100" {
+                div class="card h-100" id=(format!("fed-card-{}", fed_id_str)) {
                     div class="card-header dashboard-header d-flex justify-content-between align-items-center" {
                         div {
                             (fed.federation_name.clone().unwrap_or("Unnamed Federation".to_string()))
                         }
 
-                        form method="post" action={(format!("/ui/federations/{}/leave", fed.federation_id))} {
-                            button type="submit"
-                                class="btn btn-outline-danger btn-sm"
-                                title="Leave Federation"
-                                onclick=("return confirm('Are you sure you want to leave this federation? You will need to re-connect the federation to access any remaining balance.');")
-                            { "📤" }
+                        div class="d-flex align-items-center gap-2" {
+                            // Unit toggle
+                            div class="btn-group btn-group-sm unit-toggle" role="group" data-fed-id=(fed_id_str) {
+                                input type="radio" class="btn-check" name=(format!("unit-{}", fed_id_str)) id=(format!("unit-btc-{}", fed_id_str)) value="btc" checked;
+                                label class="btn btn-outline-primary" for=(format!("unit-btc-{}", fed_id_str)) { "BTC" }
+
+                                input type="radio" class="btn-check" name=(format!("unit-{}", fed_id_str)) id=(format!("unit-sats-{}", fed_id_str)) value="sats";
+                                label class="btn btn-outline-primary" for=(format!("unit-sats-{}", fed_id_str)) { "sats" }
+
+                                input type="radio" class="btn-check" name=(format!("unit-{}", fed_id_str)) id=(format!("unit-msats-{}", fed_id_str)) value="msats";
+                                label class="btn btn-outline-primary" for=(format!("unit-msats-{}", fed_id_str)) { "msats" }
+                            }
+
+                            form method="post" action={(format!("/ui/federations/{}/leave", fed.federation_id))} {
+                                button type="submit"
+                                    class="btn btn-outline-danger btn-sm"
+                                    title="Leave Federation"
+                                    onclick=("return confirm('Are you sure you want to leave this federation? You will need to re-connect the federation to access any remaining balance.');")
+                                { "📤" }
+                            }
                         }
                     }
                     div class="card-body" {
-                        div id=(format!("balance-{}", fed.federation_id)) class=(balance_class) {
-                            "Balance: " strong { (fed.balance_msat) }
+                        div id=(format!("balance-{}", fed.federation_id)) class=(balance_class) data-msats=(fed.balance_msat.msats) {
+                            "Balance: " strong class="amount-display" { (format!("{:.8} BTC", btc_value)) }
                         }
                         div class="alert alert-secondary py-1 px-2 small" {
                             "Last Backup: " strong { (last_backup_str) }
@@ -405,18 +485,6 @@ pub fn render<E: Display>(
                                             placeholder="1000"
                                             min="1"
                                             required;
-                                    }
-
-                                    // Optional: allow_overpay checkbox
-                                    div class="form-check mb-2" {
-                                        input type="checkbox"
-                                            class="form-check-input"
-                                            id={(format!("spend-overpay-{}", fed.federation_id))}
-                                            name="allow_overpay"
-                                            value="true";
-                                        label class="form-check-label" for={(format!("spend-overpay-{}", fed.federation_id))} {
-                                            "Allow overpay (if exact amount unavailable)"
-                                        }
                                     }
 
                                     button type="submit" class="btn btn-primary" { "Generate Ecash" }
@@ -873,6 +941,8 @@ pub async fn withdraw_confirm_handler<E: Display>(
                 "alert alert-success"
             };
 
+            let balance_btc = updated_balance.msats as f64 / 100_000_000_000.0;
+
             html! {
                 // Success message (swaps into result div)
                 div class="alert alert-success" {
@@ -884,9 +954,10 @@ pub async fn withdraw_confirm_handler<E: Display>(
                 // Out-of-band swap to update balance banner
                 div id=(format!("balance-{}", federation_id))
                     class=(balance_class)
+                    data-msats=(updated_balance.msats)
                     hx-swap-oob="true"
                 {
-                    "Balance: " strong { (updated_balance) }
+                    "Balance: " strong class="amount-display" { (format!("{:.8} BTC", balance_btc)) }
                 }
             }
         }
@@ -909,14 +980,28 @@ pub async fn spend_ecash_handler<E: Display>(
     let federation_id = payload.federation_id;
     let requested_amount = payload.amount;
 
-    // Always include the federation invite in the ecash notes
-    let mut payload = payload;
-    payload.include_invite = true;
-
     let markup = match state.api.handle_spend_ecash_msg(payload).await {
         Ok(response) => {
-            let notes_string = response.notes.to_string();
-            let actual_amount = response.notes.total_amount();
+            let notes_string = response.notes.clone();
+
+            // Compute actual amount from notes string - try ECash first, then OOBNotes
+            let actual_amount = if let Ok(ecash) = base32::decode_prefixed::<
+                fedimint_mintv2_client::ECash,
+            >(FEDIMINT_PREFIX, &notes_string)
+            {
+                ecash.amount()
+            } else if let Ok(notes) = notes_string.parse::<OOBNotes>() {
+                notes.total_amount()
+            } else {
+                return Html(
+                    html! {
+                        div class="alert alert-danger" {
+                            "Failed to parse returned ecash notes"
+                        }
+                    }
+                    .into_string(),
+                );
+            };
             let overspent = actual_amount > requested_amount;
 
             // Fetch updated balance for the out-of-band swap
@@ -939,6 +1024,8 @@ pub async fn spend_ecash_handler<E: Display>(
             } else {
                 "alert alert-success"
             };
+
+            let balance_btc = updated_balance.msats as f64 / 100_000_000_000.0;
 
             html! {
                 div class="card card-body bg-light" {
@@ -971,9 +1058,10 @@ pub async fn spend_ecash_handler<E: Display>(
                 // Out-of-band swap to update balance banner
                 div id=(format!("balance-{}", federation_id))
                     class=(balance_class)
+                    data-msats=(updated_balance.msats)
                     hx-swap-oob="true"
                 {
-                    "Balance: " strong { (updated_balance) }
+                    "Balance: " strong class="amount-display" { (format!("{:.8} BTC", balance_btc)) }
                 }
             }
         }
@@ -993,29 +1081,43 @@ pub async fn receive_ecash_handler<E: Display>(
     _auth: UserAuth,
     Form(form): Form<ReceiveEcashForm>,
 ) -> impl IntoResponse {
-    // Parse the notes string manually to provide better error messages
-    let notes = match form.notes.trim().parse::<OOBNotes>() {
-        Ok(n) => n,
-        Err(e) => {
-            return Html(
-                html! {
-                    div class="alert alert-danger" {
-                        "Invalid ecash format: " (e)
+    let notes_str = form.notes.trim().to_string();
+
+    // Try to extract federation_id_prefix - try ECash first, then OOBNotes
+    let federation_id_prefix = if let Ok(ecash) =
+        base32::decode_prefixed::<fedimint_mintv2_client::ECash>(FEDIMINT_PREFIX, &notes_str)
+    {
+        match ecash.mint() {
+            Some(fed_id) => fed_id.to_prefix(),
+            None => {
+                return Html(
+                    html! {
+                        div class="alert alert-danger" {
+                            "Invalid ecash format: missing federation ID"
+                        }
                     }
-                }
-                .into_string(),
-            );
+                    .into_string(),
+                );
+            }
         }
+    } else if let Ok(notes) = notes_str.parse::<OOBNotes>() {
+        notes.federation_id_prefix()
+    } else {
+        return Html(
+            html! {
+                div class="alert alert-danger" {
+                    "Invalid ecash format: could not parse as ECash or OOBNotes"
+                }
+            }
+            .into_string(),
+        );
     };
 
-    // Construct payload from parsed notes
+    // Construct payload with string notes
     let payload = ReceiveEcashPayload {
-        notes,
+        notes: notes_str,
         wait: form.wait,
     };
-
-    // Extract federation_id_prefix from notes before consuming payload
-    let federation_id_prefix = payload.notes.federation_id_prefix();
 
     let markup = match state.api.handle_receive_ecash_msg(payload).await {
         Ok(response) => {
@@ -1040,6 +1142,8 @@ pub async fn receive_ecash_handler<E: Display>(
                 "alert alert-success"
             };
 
+            let balance_btc = updated_balance.msats as f64 / 100_000_000_000.0;
+
             html! {
                 div class=(balance_class) {
                     div class="d-flex justify-content-between align-items-center" {
@@ -1051,9 +1155,10 @@ pub async fn receive_ecash_handler<E: Display>(
                 // Out-of-band swap to update balance banner
                 div id=(format!("balance-{}", federation_id))
                     class=(balance_class)
+                    data-msats=(updated_balance.msats)
                     hx-swap-oob="true"
                 {
-                    "Balance: " strong { (updated_balance) }
+                    "Balance: " strong class="amount-display" { (format!("{:.8} BTC", balance_btc)) }
                 }
             }
         }

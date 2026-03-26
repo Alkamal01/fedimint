@@ -89,14 +89,18 @@ where
 
             // FIXME: don't rely on SystemTime for ordering and introduce a state transition
             // index instead (dpc was right again xD)
+            let num_active = active_states.len();
+            let num_inactive = inactive_states.len();
             let mut all_states_timed = active_states
                 .into_iter()
                 .chain(inactive_states)
                 .collect::<Vec<(S, _)>>();
-            all_states_timed.sort_by(|(_, t1), (_, t2)| t1.cmp(t2));
+            all_states_timed.sort_by_key(|(_, t1)| *t1);
             debug!(
                 operation_id = %operation_id.fmt_short(),
-                num = all_states_timed.len(),
+                module_instance = %self.module_instance,
+                active = num_active,
+                inactive = num_inactive,
                 "Returning state transitions from DB for notifier subscription",
             );
             all_states_timed

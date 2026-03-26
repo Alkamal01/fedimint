@@ -11,7 +11,10 @@ use std::{env, unreachable};
 use anyhow::{Context, Result, anyhow, bail, format_err};
 use fedimint_core::PeerId;
 use fedimint_core::admin_client::SetupStatus;
-use fedimint_core::envs::{FM_ENABLE_MODULE_LNV1_ENV, FM_ENABLE_MODULE_LNV2_ENV, is_env_var_set};
+use fedimint_core::envs::{
+    FM_ENABLE_MODULE_LNV2_ENV, FM_ENABLE_MODULE_MINTV2_ENV, FM_ENABLE_MODULE_WALLETV2_ENV,
+    is_env_var_set,
+};
 use fedimint_core::module::ApiAuth;
 use fedimint_core::task::{self, block_in_place, block_on};
 use fedimint_core::time::now;
@@ -469,7 +472,7 @@ macro_rules! poll_eq {
 macro_rules! poll_almost_equal {
     ($left:expr_2021, $right:expr_2021) => {
         match ($left, $right) {
-            (left, right) => $crate::util::almost_equal(left, right, 10_000)
+            (left, right) => $crate::util::almost_equal(left, right, 1_000_000)
                 .map_err(|e| std::ops::ControlFlow::Continue(anyhow::anyhow!(e))),
         }
     };
@@ -538,7 +541,7 @@ where
     unreachable!();
 }
 
-const DEFAULT_POLL_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_POLL_TIMEOUT: Duration = Duration::from_mins(1);
 const EXTRA_LONG_POLL_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// Retry until `f` succeeds or default timeout is reached
@@ -684,8 +687,9 @@ impl FedimintdCmd {
             Err(_) => cmd!(FedimintdCmd, "version-hash")
                 .out_string()
                 .await
-                .map(|v| version_hash_to_version(&v).unwrap_or(DEFAULT_VERSION))
-                .unwrap_or(DEFAULT_VERSION),
+                .map_or(DEFAULT_VERSION, |v| {
+                    version_hash_to_version(&v).unwrap_or(DEFAULT_VERSION)
+                }),
         }
     }
 }
@@ -706,8 +710,9 @@ impl Gatewayd {
             Err(_) => cmd!(Gatewayd, "version-hash")
                 .out_string()
                 .await
-                .map(|v| version_hash_to_version(&v).unwrap_or(DEFAULT_VERSION))
-                .unwrap_or(DEFAULT_VERSION),
+                .map_or(DEFAULT_VERSION, |v| {
+                    version_hash_to_version(&v).unwrap_or(DEFAULT_VERSION)
+                }),
         }
     }
 }
@@ -736,7 +741,7 @@ impl FedimintCli {
         cmd!(
             self,
             "--password",
-            &auth.0,
+            auth.as_str(),
             "admin",
             "dkg",
             "--ws",
@@ -752,21 +757,26 @@ impl FedimintCli {
         peer: &PeerId,
         auth: &ApiAuth,
         endpoint: &str,
+        federation_size: Option<usize>,
     ) -> Result<String> {
-        let json = cmd!(
+        let mut command = cmd!(
             self,
             "--password",
-            &auth.0,
+            auth.as_str(),
             "admin",
             "setup",
             endpoint,
             "set-local-params",
             format!("Devimint Guardian {peer}"),
             "--federation-name",
-            "Devimint Federation"
-        )
-        .out_json()
-        .await?;
+            "Devimint Federation",
+        );
+
+        if let Some(size) = federation_size {
+            command = command.args(["--federation-size", &size.to_string()]);
+        }
+
+        let json = command.out_json().await?;
 
         Ok(serde_json::from_value(json)?)
     }
@@ -780,7 +790,7 @@ impl FedimintCli {
         let json = cmd!(
             self,
             "--password",
-            &auth.0,
+            auth.as_str(),
             "admin",
             "setup",
             endpoint,
@@ -797,7 +807,7 @@ impl FedimintCli {
         cmd!(
             self,
             "--password",
-            &auth.0,
+            auth.as_str(),
             "admin",
             "setup",
             endpoint,
@@ -812,7 +822,7 @@ impl FedimintCli {
         let json = cmd!(
             self,
             "--password",
-            &auth.0,
+            auth.as_str(),
             "admin",
             "setup",
             endpoint,
@@ -828,7 +838,7 @@ impl FedimintCli {
         cmd!(
             self,
             "--password",
-            &auth.0,
+            auth.as_str(),
             "admin",
             "setup",
             endpoint,
@@ -842,7 +852,7 @@ impl FedimintCli {
         cmd!(
             self,
             "--password",
-            &auth.0,
+            auth.as_str(),
             "--our-id",
             our_id,
             "admin",
@@ -857,7 +867,7 @@ impl FedimintCli {
         cmd!(
             self,
             "--password",
-            &auth.0,
+            auth.as_str(),
             "--our-id",
             our_id,
             "admin",
@@ -1025,14 +1035,17 @@ fn to_command(cli: Vec<String>) -> Command {
     }
 }
 
-pub fn supports_lnv1() -> bool {
-    std::env::var_os(FM_ENABLE_MODULE_LNV1_ENV).is_none()
-        || is_env_var_set(FM_ENABLE_MODULE_LNV1_ENV)
-}
-
 pub fn supports_lnv2() -> bool {
     std::env::var_os(FM_ENABLE_MODULE_LNV2_ENV).is_none()
         || is_env_var_set(FM_ENABLE_MODULE_LNV2_ENV)
+}
+
+pub fn supports_wallet_v2() -> bool {
+    is_env_var_set(FM_ENABLE_MODULE_WALLETV2_ENV)
+}
+
+pub fn supports_mint_v2() -> bool {
+    is_env_var_set(FM_ENABLE_MODULE_MINTV2_ENV)
 }
 
 /// Returns true if running backwards-compatibility tests

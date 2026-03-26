@@ -1,6 +1,7 @@
 pub mod announcement;
 pub mod guardian_metadata;
 mod http_auth;
+pub mod pkarr_publish;
 
 use std::fmt::{self, Formatter};
 use std::net::SocketAddr;
@@ -78,7 +79,7 @@ impl ApiSecrets {
 }
 
 /// How long to wait before timing out client connections
-const API_ENDPOINT_TIMEOUT: Duration = Duration::from_secs(60);
+const API_ENDPOINT_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// Has the context necessary for serving API endpoints
 ///

@@ -19,7 +19,7 @@ use tokio::sync::OnceCell;
 
 use crate::consensus::api::backup_statistics_static;
 
-const BACKUP_STATS_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+const BACKUP_STATS_REFRESH_INTERVAL: Duration = Duration::from_mins(1);
 
 pub static TX_ELEMS_BUCKETS: LazyLock<Vec<f64>> = LazyLock::new(|| {
     vec![
@@ -90,6 +90,40 @@ pub(crate) static CONSENSUS_ORDERING_LATENCY_SECONDS: LazyLock<Histogram> = Lazy
             "consensus_ordering_latency_seconds",
             "Duration of ordering a batch of consensus items",
         ),
+        REGISTRY
+    )
+    .unwrap()
+});
+
+pub(crate) static IROH_API_CONNECTIONS_ACTIVE: LazyLock<IntGauge> = LazyLock::new(|| {
+    register_int_gauge_with_registry!(
+        opts!(
+            "iroh_api_connections_active",
+            "Number of currently active iroh API connections",
+        ),
+        REGISTRY
+    )
+    .unwrap()
+});
+
+pub(crate) static IROH_API_CONNECTION_DURATION_SECONDS: LazyLock<Histogram> = LazyLock::new(|| {
+    register_histogram_with_registry!(
+        histogram_opts!(
+            "iroh_api_connection_duration_seconds",
+            "Duration of iroh API connections",
+        ),
+        REGISTRY
+    )
+    .unwrap()
+});
+
+pub(crate) static IROH_API_REQUEST_DURATION_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| {
+    register_histogram_vec_with_registry!(
+        histogram_opts!(
+            "iroh_api_request_duration_seconds",
+            "Duration of processing an iroh API request",
+        ),
+        &["method"],
         REGISTRY
     )
     .unwrap()

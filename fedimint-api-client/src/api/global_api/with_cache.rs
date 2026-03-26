@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, format_err};
 use bitcoin::secp256k1;
-use fedimint_connectors::ServerResult;
+use fedimint_connectors::{DynGuaridianConnection, ServerResult};
 use fedimint_core::admin_client::{GuardianConfigBackup, SetLocalParamsRequest, SetupStatus};
 use fedimint_core::backup::{BackupStatistics, ClientBackupSnapshot};
 use fedimint_core::core::backup::SignedBackupRequest;
@@ -126,7 +126,7 @@ where
         block_index: u64,
         decoders: &ModuleDecoderRegistry,
     ) -> anyhow::Result<SessionOutcome> {
-        if block_index % 100 == 0 {
+        if block_index.is_multiple_of(100) {
             debug!(target: LOG_CLIENT_NET_API, block_index, "Awaiting block's outcome from Federation");
         } else {
             trace!(target: LOG_CLIENT_NET_API, block_index, "Awaiting block's outcome from Federation");
@@ -152,7 +152,7 @@ where
         broadcast_public_keys: &BTreeMap<PeerId, secp256k1::PublicKey>,
         decoders: &ModuleDecoderRegistry,
     ) -> anyhow::Result<SessionStatus> {
-        if block_index % 100 == 0 {
+        if block_index.is_multiple_of(100) {
             debug!(target: LOG_CLIENT_NET_API, block_index, "Get session status raw v2");
         } else {
             trace!(target: LOG_CLIENT_NET_API, block_index, "Get session status raw v2");
@@ -199,7 +199,7 @@ where
         block_index: u64,
         decoders: &ModuleDecoderRegistry,
     ) -> anyhow::Result<SessionStatus> {
-        if block_index % 100 == 0 {
+        if block_index.is_multiple_of(100) {
             debug!(target: LOG_CLIENT_NET_API, block_index, "Get session status raw v1");
         } else {
             trace!(target: LOG_CLIENT_NET_API, block_index, "Get session status raw v1");
@@ -247,6 +247,10 @@ where
 
     async fn wait_for_initialized_connections(&self) {
         self.inner.wait_for_initialized_connections().await;
+    }
+
+    async fn get_peer_connection(&self, peer_id: PeerId) -> ServerResult<DynGuaridianConnection> {
+        self.inner.get_peer_connection(peer_id).await
     }
 }
 
@@ -385,6 +389,7 @@ where
         federation_name: Option<String>,
         disable_base_fees: Option<bool>,
         enabled_modules: Option<BTreeSet<ModuleKind>>,
+        federation_size: Option<u32>,
         auth: ApiAuth,
     ) -> FederationResult<String> {
         self.request_admin(
@@ -394,6 +399,7 @@ where
                 federation_name,
                 disable_base_fees,
                 enabled_modules,
+                federation_size,
             }),
             auth,
         )

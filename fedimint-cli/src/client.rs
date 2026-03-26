@@ -81,12 +81,14 @@ pub enum ClientCmd {
     /// Display wallet info (holdings, tiers)
     Info,
     /// Reissue notes received from a third party to avoid double spends
+    #[clap(hide = true)]
     Reissue {
         oob_notes: OOBNotes,
         #[arg(long = "no-wait", action = clap::ArgAction::SetFalse)]
         wait: bool,
     },
     /// Prepare notes to send to a third party as a payment
+    #[clap(hide = true)]
     Spend {
         /// The amount of e-cash to spend
         amount: Amount,
@@ -105,8 +107,10 @@ pub enum ClientCmd {
     },
     /// Splits a string containing multiple e-cash notes (e.g. from the `spend`
     /// command) into ones that contain exactly one.
+    #[clap(hide = true)]
     Split { oob_notes: OOBNotes },
     /// Combines two or more serialized e-cash notes strings
+    #[clap(hide = true)]
     Combine {
         #[clap(required = true)]
         oob_notes: Vec<OOBNotes>,
@@ -126,6 +130,7 @@ pub enum ClientCmd {
         force_internal: bool,
     },
     /// Wait for incoming invoice to be paid
+    #[clap(hide = true)]
     AwaitInvoice { operation_id: OperationId },
     /// Pay a lightning invoice or lnurl via a gateway
     #[clap(hide = true)]
@@ -144,8 +149,10 @@ pub enum ClientCmd {
         force_internal: bool,
     },
     /// Wait for a lightning payment to complete
+    #[clap(hide = true)]
     AwaitLnPay { operation_id: OperationId },
     /// List registered gateways
+    #[clap(hide = true)]
     ListGateways {
         /// Don't fetch the registered gateways from the federation
         #[clap(long, default_value = "false")]
@@ -158,6 +165,7 @@ pub enum ClientCmd {
     #[clap(hide = true)]
     AwaitDeposit { operation_id: OperationId },
     /// Withdraw funds from the federation
+    #[clap(hide = true)]
     Withdraw {
         #[clap(long)]
         amount: BitcoinAmountOrAll,
@@ -178,8 +186,11 @@ pub enum ClientCmd {
     DiscoverVersion,
     /// Join federation and restore modules that support it
     Restore {
+        /// BIP-39 mnemonic used by standard Fedimint CLI clients.
+        ///
+        /// If omitted, use global `--federation-secret-hex` instead.
         #[clap(long)]
-        mnemonic: String,
+        mnemonic: Option<String>,
         #[clap(long)]
         invite_code: String,
     },
@@ -199,8 +210,10 @@ pub enum ClientCmd {
         args: Vec<ffi::OsString>,
     },
     /// Returns the client config
+    #[clap(hide = true)]
     Config,
     /// Gets the current fedimint AlephBFT session count
+    #[clap(hide = true)]
     SessionCount,
 }
 
@@ -211,6 +224,10 @@ pub async fn handle_command(
     match command {
         ClientCmd::Info => get_note_summary(&client).await,
         ClientCmd::Reissue { oob_notes, wait } => {
+            warn!(
+                target: LOG_CLIENT,
+                "Command deprecated. Use `fedimint-cli module mint reissue` instead."
+            );
             let amount = oob_notes.total_amount();
 
             let mint = client.get_first_module::<MintClientModule>()?;
@@ -240,6 +257,10 @@ pub async fn handle_command(
             timeout,
             include_invite,
         } => {
+            warn!(
+                target: LOG_CLIENT,
+                "Command deprecated. Use `fedimint-cli module mint spend` instead."
+            );
             warn!(
                 target: LOG_CLIENT,
                 "The client will try to double-spend these notes after the duration specified by the --timeout option to recover any unclaimed e-cash."
@@ -286,6 +307,10 @@ pub async fn handle_command(
             }))
         }
         ClientCmd::Split { oob_notes } => {
+            warn!(
+                target: LOG_CLIENT,
+                "Command deprecated. Use `fedimint-cli module mint split` instead."
+            );
             let federation = oob_notes.federation_id_prefix();
             let notes = oob_notes
                 .notes()
@@ -309,6 +334,10 @@ pub async fn handle_command(
             }))
         }
         ClientCmd::Combine { oob_notes } => {
+            warn!(
+                target: LOG_CLIENT,
+                "Command deprecated. Use `fedimint-cli module mint combine` instead."
+            );
             let federation_id_prefix = match oob_notes
                 .iter()
                 .map(OOBNotes::federation_id_prefix)
@@ -366,6 +395,10 @@ pub async fn handle_command(
             .unwrap())
         }
         ClientCmd::AwaitInvoice { operation_id } => {
+            warn!(
+                target: LOG_CLIENT,
+                "Command deprecated. Use `fedimint-cli module ln await-invoice` instead."
+            );
             let lightning_module = &client.get_first_module::<LightningClientModule>()?;
             let mut updates = lightning_module
                 .subscribe_ln_receive(operation_id)
@@ -427,6 +460,10 @@ pub async fn handle_command(
             Ok(serde_json::to_value(outcome).expect("Cant fail"))
         }
         ClientCmd::AwaitLnPay { operation_id } => {
+            warn!(
+                target: LOG_CLIENT,
+                "Command deprecated. Use `fedimint-cli module ln await-pay` instead."
+            );
             let lightning_module = client.get_first_module::<LightningClientModule>()?;
             let outcome = lightning_module
                 .await_outgoing_payment(operation_id)
@@ -434,6 +471,10 @@ pub async fn handle_command(
             Ok(serde_json::to_value(outcome).expect("Cant fail"))
         }
         ClientCmd::ListGateways { no_update } => {
+            warn!(
+                target: LOG_CLIENT,
+                "Command deprecated. Use `fedimint-cli module ln list-gateways` instead."
+            );
             let lightning_module = client.get_first_module::<LightningClientModule>()?;
             if !no_update {
                 lightning_module.update_gateway_cache().await?;
@@ -446,8 +487,9 @@ pub async fn handle_command(
             Ok(json!(&gateways))
         }
         ClientCmd::DepositAddress => {
-            eprintln!(
-                "`deposit-address` command is deprecated. Use `module wallet new-deposit-address` instead."
+            warn!(
+                target: LOG_CLIENT,
+                "Command deprecated. Use `fedimint-cli module wallet new-deposit-address` instead."
             );
             let (operation_id, address, tweak_idx) = client
                 .get_first_module::<WalletClientModule>()?
@@ -462,7 +504,10 @@ pub async fn handle_command(
             })
         }
         ClientCmd::AwaitDeposit { operation_id } => {
-            eprintln!("`await-deposit` is deprecated. Use `module wallet await-deposit` instead.");
+            warn!(
+                target: LOG_CLIENT,
+                "Command deprecated. Use `fedimint-cli module wallet await-deposit` instead."
+            );
             client
                 .get_first_module::<WalletClientModule>()?
                 .await_num_deposits_by_operation_id(operation_id, 1)
@@ -526,6 +571,10 @@ pub async fn handle_command(
             }))
         }
         ClientCmd::Withdraw { amount, address } => {
+            warn!(
+                target: LOG_CLIENT,
+                "Command deprecated. Use `fedimint-cli module wallet withdraw` instead."
+            );
             let wallet_module = client.get_first_module::<WalletClientModule>()?;
             let address = address.require_network(wallet_module.get_network())?;
             let (amount, fees) = match amount {
@@ -613,10 +662,18 @@ pub async fn handle_command(
             }
         }
         ClientCmd::Config => {
+            warn!(
+                target: LOG_CLIENT,
+                "Command deprecated. Use `fedimint-cli dev config` instead."
+            );
             let config = client.get_config_json().await;
             Ok(serde_json::to_value(config).expect("Client config is serializable"))
         }
         ClientCmd::SessionCount => {
+            warn!(
+                target: LOG_CLIENT,
+                "Command deprecated. Use `fedimint-cli dev session-count` instead."
+            );
             let count = client.api().session_count().await?;
             Ok(json!({ "count": count }))
         }
@@ -624,24 +681,48 @@ pub async fn handle_command(
 }
 
 async fn get_note_summary(client: &ClientHandleArc) -> anyhow::Result<serde_json::Value> {
-    let mint_client = client.get_first_module::<MintClientModule>()?;
-    let mint_module_id = client
-        .get_first_instance(&fedimint_mint_client::KIND)
-        .context("Mint module not found")?;
-    let wallet_client = client.get_first_module::<WalletClientModule>()?;
-    let summary = mint_client
-        .get_note_counts_by_denomination(
-            &mut client
-                .db()
-                .begin_transaction_nc()
-                .await
-                .to_ref_with_prefix_module_id(mint_module_id)
-                .0,
-        )
-        .await;
+    // Try wallet v1 first, then walletv2
+    let network = if let Ok(wallet_client) = client.get_first_module::<WalletClientModule>() {
+        wallet_client.get_network()
+    } else if let Ok(wallet_client) =
+        client.get_first_module::<fedimint_walletv2_client::WalletClientModule>()
+    {
+        wallet_client.get_network()
+    } else {
+        anyhow::bail!("No wallet module found");
+    };
+
+    let summary = if let Ok(mint_client) = client.get_first_module::<MintClientModule>() {
+        let mint_module_id = client
+            .get_first_instance(&fedimint_mint_client::KIND)
+            .context("Mint module not found")?;
+        mint_client
+            .get_note_counts_by_denomination(
+                &mut client
+                    .db()
+                    .begin_transaction_nc()
+                    .await
+                    .to_ref_with_prefix_module_id(mint_module_id)
+                    .0,
+            )
+            .await
+    } else if let Ok(mintv2_client) =
+        client.get_first_module::<fedimint_mintv2_client::MintClientModule>()
+    {
+        let counts = mintv2_client.get_count_by_denomination().await;
+        let mut summary = TieredCounts::default();
+        #[allow(clippy::cast_possible_truncation)]
+        for (denomination, count) in counts {
+            summary.inc(denomination.amount(), count as usize);
+        }
+        summary
+    } else {
+        anyhow::bail!("No mint module found");
+    };
+
     Ok(serde_json::to_value(InfoResponse {
         federation_id: client.federation_id(),
-        network: wallet_client.get_network(),
+        network,
         meta: client.config().await.global.meta.clone(),
         total_amount_msat: summary.total_amount(),
         total_num_notes: summary.count_items(),

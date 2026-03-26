@@ -215,6 +215,85 @@ impl Client {
         self.api.connection_status_stream()
     }
 
+    /// Establishes connections to all federation guardians once.
+    ///
+    /// Spawns tasks to connect to each guardian in the federation. Unlike
+    /// [`Self::spawn_federation_reconnect`], this only attempts to establish
+    /// connections once and completes - it does not maintain or reconnect.
+    ///
+    /// Useful for warming up connections before making API calls.
+    pub fn federation_reconnect(&self) {
+        let peers: Vec<PeerId> = self.api.all_peers().iter().copied().collect();
+
+        for peer_id in peers {
+            let api = self.api.clone();
+            self.task_group.spawn_cancellable(
+                format!("federation-reconnect-once-{peer_id}"),
+                async move {
+                    if let Err(e) = api.get_peer_connection(peer_id).await {
+                        debug!(
+                            target: LOG_CLIENT_NET_API,
+                            %peer_id,
+                            err = %e.fmt_compact(),
+                            "Failed to connect to peer"
+                        );
+                    }
+                },
+            );
+        }
+    }
+
+    /// Spawns background tasks that proactively maintain connections to all
+    /// federation guardians unconditionally.
+    ///
+    /// For each guardian, a task loops: establishes a connection, waits for it
+    /// to disconnect, then reconnects.
+    ///
+    /// The tasks are cancellable and will be terminated when the client shuts
+    /// down.
+    ///
+    /// By default [`Client`] creates connections on demand only, and share
+    /// them as long as they are alive.
+    ///
+    /// Reconnecting continuously might increase data and battery usage,
+    /// but potentially improve UX, depending on the time it takes to establish
+    /// a new network connection in given network conditions.
+    ///
+    /// Downstream users are encouraged to implement their own version of
+    /// this function, e.g. by reconnecting only when it is anticipated
+    /// that connection might be needed, or alternatively pre-warm
+    /// connections by calling [`Self::federation_reconnect`] when it seems
+    /// worthwhile.
+    pub fn spawn_federation_reconnect(&self) {
+        let peers: Vec<PeerId> = self.api.all_peers().iter().copied().collect();
+
+        for peer_id in peers {
+            let api = self.api.clone();
+            self.task_group.spawn_cancellable(
+                format!("federation-reconnect-{peer_id}"),
+                async move {
+                    loop {
+                        match api.get_peer_connection(peer_id).await {
+                            Ok(conn) => {
+                                conn.await_disconnection().await;
+                            }
+                            Err(e) => {
+                                // Connection failed, backoff is handled inside
+                                // get_or_create_connection
+                                debug!(
+                                    target: LOG_CLIENT_NET_API,
+                                    %peer_id,
+                                    err = %e.fmt_compact(),
+                                    "Failed to connect to peer, will retry"
+                                );
+                            }
+                        }
+                    }
+                },
+            );
+        }
+    }
+
     /// Get the [`TaskGroup`] that is tied to Client's lifetime.
     pub fn task_group(&self) -> &TaskGroup {
         &self.task_group
@@ -696,7 +775,13 @@ impl Client {
 
         let txid = transaction.tx_hash();
 
-        debug!(target: LOG_CLIENT_NET_API, %txid, ?transaction,  "Finalized and submitting transaction");
+        debug!(
+            target: LOG_CLIENT_NET_API,
+            %txid,
+            operation_id = %operation_id.fmt_short(),
+            ?transaction,
+            "Finalized and submitting transaction",
+        );
 
         let tx_submission_sm = DynState::from_typed(
             TRANSACTION_SUBMISSION_MODULE_INSTANCE,
@@ -1484,6 +1569,11 @@ impl Client {
     ) {
         let db = self.db.clone();
         let log_ordering_wakeup_tx = self.log_ordering_wakeup_tx.clone();
+        let module_kinds: BTreeMap<ModuleInstanceId, String> = self
+            .modules
+            .iter_modules_id_kind()
+            .map(|(id, kind)| (id, kind.to_string()))
+            .collect();
         self.task_group
             .spawn("module recoveries", |_task_handle| async {
                 Self::run_module_recoveries_task(
@@ -1492,6 +1582,7 @@ impl Client {
                     recovery_sender,
                     module_recoveries,
                     module_recovery_progress_receivers,
+                    module_kinds,
                 )
                 .await;
             });
@@ -1509,6 +1600,7 @@ impl Client {
             ModuleInstanceId,
             watch::Receiver<RecoveryProgress>,
         >,
+        module_kinds: BTreeMap<ModuleInstanceId, String>,
     ) {
         debug!(target: LOG_CLIENT_RECOVERY, num_modules=%module_recovery_progress_receivers.len(), "Staring module recoveries");
         let mut completed_stream = Vec::new();
@@ -1582,6 +1674,7 @@ impl Client {
                 info!(
                     target: LOG_CLIENT,
                     module_instance_id,
+                    kind = module_kinds.get(&module_instance_id).map(String::as_str).unwrap_or("unknown"),
                     progress = format!("{}/{}", progress.complete, progress.total),
                     "Recovery progress"
                 );

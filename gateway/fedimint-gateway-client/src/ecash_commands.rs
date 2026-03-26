@@ -5,17 +5,19 @@ use fedimint_core::config::FederationId;
 use fedimint_core::util::SafeUrl;
 use fedimint_core::{Amount, BitcoinAmountOrAll};
 use fedimint_gateway_client::{
-    backup, get_deposit_address, receive_ecash, recheck_address, spend_ecash, withdraw,
+    backup, get_deposit_address, pegin_from_onchain, receive_ecash, recheck_address, spend_ecash,
+    withdraw, withdraw_to_onchain,
 };
 use fedimint_gateway_common::{
-    BackupPayload, DepositAddressPayload, DepositAddressRecheckPayload, ReceiveEcashPayload,
-    SpendEcashPayload, WithdrawPayload,
+    BackupPayload, DepositAddressPayload, DepositAddressRecheckPayload, PeginFromOnchainPayload,
+    ReceiveEcashPayload, SpendEcashPayload, WithdrawPayload, WithdrawToOnchainPayload,
 };
 use fedimint_ln_common::client::GatewayApi;
-use fedimint_mint_client::OOBNotes;
 
-use crate::print_response;
+use crate::{CliOutput, CliOutputResult};
 
+/// Ecash management commands for pegging funds into a federation, pegging funds
+/// out of a federation, or spending/receiving ecash.
 #[derive(Subcommand)]
 pub enum EcashCommands {
     /// Make a backup of snapshot of all e-cash.
@@ -36,6 +38,18 @@ pub enum EcashCommands {
         #[clap(long)]
         federation_id: FederationId,
     },
+    /// Send funds from the gateway's onchain wallet to the federation's ecash
+    /// wallet
+    PeginFromOnchain {
+        #[clap(long)]
+        federation_id: FederationId,
+        /// The amount to pegin
+        #[clap(long)]
+        amount: BitcoinAmountOrAll,
+        /// The fee rate to use in satoshis per vbyte.
+        #[clap(long)]
+        fee_rate_sats_per_vbyte: u64,
+    },
     /// Claim funds from a gateway federation to an on-chain address.
     Pegout {
         #[clap(long)]
@@ -47,39 +61,43 @@ pub enum EcashCommands {
         #[clap(long)]
         address: Address<NetworkUnchecked>,
     },
+    /// Claim funds from a gateway federation to the gateway's onchain wallet
+    PegoutToOnchain {
+        #[clap(long)]
+        federation_id: FederationId,
+        /// The amount to withdraw
+        #[clap(long)]
+        amount: BitcoinAmountOrAll,
+    },
     /// Send e-cash out of band
     Send {
         #[clap(long)]
         federation_id: FederationId,
         amount: Amount,
-        #[clap(long)]
-        allow_overpay: bool,
-        #[clap(long, default_value_t = 60 * 60 * 24 * 7)]
-        timeout: u64,
-        #[clap(long)]
-        include_invite: bool,
     },
     /// Receive e-cash out of band
     Receive {
+        /// E-cash notes (`OOBNotes` for v1 or `ECash` for v2)
         #[clap(long)]
-        notes: OOBNotes,
+        notes: String,
         #[arg(long = "no-wait", action = clap::ArgAction::SetFalse)]
         wait: bool,
     },
 }
 
 impl EcashCommands {
-    pub async fn handle(self, client: &GatewayApi, base_url: &SafeUrl) -> anyhow::Result<()> {
+    pub async fn handle(self, client: &GatewayApi, base_url: &SafeUrl) -> CliOutputResult {
         match self {
             Self::Backup { federation_id } => {
                 backup(client, base_url, BackupPayload { federation_id }).await?;
+                Ok(CliOutput::Empty)
             }
             Self::Pegin { federation_id } => {
-                let response =
+                let address =
                     get_deposit_address(client, base_url, DepositAddressPayload { federation_id })
                         .await?;
 
-                print_response(response);
+                Ok(CliOutput::DepositAddress { address })
             }
             Self::PeginRecheck {
                 address,
@@ -94,7 +112,25 @@ impl EcashCommands {
                     },
                 )
                 .await?;
-                print_response(response);
+                Ok(CliOutput::DepositRecheck(response))
+            }
+            Self::PeginFromOnchain {
+                federation_id,
+                amount,
+                fee_rate_sats_per_vbyte,
+            } => {
+                let txid = pegin_from_onchain(
+                    client,
+                    base_url,
+                    PeginFromOnchainPayload {
+                        federation_id,
+                        amount,
+                        fee_rate_sats_per_vbyte,
+                    },
+                )
+                .await?;
+
+                Ok(CliOutput::PeginTxid { txid })
             }
             Self::Pegout {
                 federation_id,
@@ -113,14 +149,27 @@ impl EcashCommands {
                 )
                 .await?;
 
-                print_response(response);
+                Ok(CliOutput::Withdraw(response))
+            }
+            Self::PegoutToOnchain {
+                federation_id,
+                amount,
+            } => {
+                let response = withdraw_to_onchain(
+                    client,
+                    base_url,
+                    WithdrawToOnchainPayload {
+                        federation_id,
+                        amount,
+                    },
+                )
+                .await?;
+
+                Ok(CliOutput::Withdraw(response))
             }
             Self::Send {
                 federation_id,
                 amount,
-                allow_overpay,
-                timeout,
-                include_invite,
             } => {
                 let response = spend_ecash(
                     client,
@@ -128,22 +177,17 @@ impl EcashCommands {
                     SpendEcashPayload {
                         federation_id,
                         amount,
-                        allow_overpay,
-                        timeout,
-                        include_invite,
                     },
                 )
                 .await?;
 
-                print_response(response);
+                Ok(CliOutput::SpendEcash(response))
             }
             Self::Receive { notes, wait } => {
                 let response =
                     receive_ecash(client, base_url, ReceiveEcashPayload { notes, wait }).await?;
-                print_response(response);
+                Ok(CliOutput::ReceiveEcash(response))
             }
         }
-
-        Ok(())
     }
 }

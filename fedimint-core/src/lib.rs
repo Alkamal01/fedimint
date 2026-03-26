@@ -441,6 +441,20 @@ impl OutPointRange {
         self.idx_range.count()
     }
 
+    pub fn start_out_point(self) -> OutPoint {
+        OutPoint {
+            txid: self.txid,
+            out_idx: self.idx_range.start(),
+        }
+    }
+
+    pub fn end_out_point(self) -> OutPoint {
+        OutPoint {
+            txid: self.txid,
+            out_idx: self.idx_range.end,
+        }
+    }
+
     pub fn txid(&self) -> TransactionId {
         self.txid
     }
@@ -610,7 +624,6 @@ pub fn default_esplora_server(network: Network, port: Option<String>) -> Bitcoin
                 "http://127.0.0.1:{}/",
                 port.unwrap_or_else(|| String::from("50002"))
             )),
-            _ => panic!("Failed to parse default esplora server"),
         }
         .expect("Failed to parse default esplora server"),
     }

@@ -10,11 +10,12 @@
     };
     flake-utils.url = "github:numtide/flake-utils";
     fenix = {
-      url = "github:nix-community/fenix";
+      # pined due to https://github.com/nix-community/fenix/issues/235
+      url = "github:nix-community/fenix?rev=6b5325a017a9a9fe7e6252ccac3680cc7181cd63";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     flakebox = {
-      url = "github:dpc/flakebox?rev=62af969ab344229d2a0d585a482293b3f186b221";
+      url = "github:dpc/flakebox?rev=09d74b0ecac2214a57887f80f2730f2399418067";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.fenix.follows = "fenix";
     };
@@ -23,7 +24,7 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     cargo-deluxe = {
-      url = "github:rustshop/cargo-deluxe?rev=4acc6488d02f032434a5a1341f21f20d328bba40";
+      url = "github:rustshop/cargo-deluxe?rev=3e9bb6051a6461dd841d5e415de9c3f315c3be81";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     bundlers = {
@@ -104,6 +105,8 @@
               workflows.flakebox-flakehub-publish.enable = false;
             };
             linker.wild.enable = false;
+
+            toolchain.channel = "stable";
 
             toolchain.components = [
               "rustc"

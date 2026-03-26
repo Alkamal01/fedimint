@@ -150,6 +150,7 @@ impl FedimintDBTool {
             .with_client_module_init(MintClientInit)
             .with_client_module_init(LightningClientInit::default())
             .with_client_module_init(fedimint_lnv2_client::LightningClientInit::default())
+            .with_client_module_init(fedimint_walletv2_client::WalletClientInit)
             .with_client_module_init(MetaClientInit)
     }
 
@@ -222,7 +223,7 @@ impl FedimintDBTool {
                 let mut dbdump = DatabaseDump::new(
                     cfg_dir.clone(),
                     options.database_dir.clone(),
-                    password.to_string(),
+                    password.clone(),
                     module_inits,
                     client_module_inits,
                     modules,

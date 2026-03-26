@@ -91,7 +91,7 @@ impl Amount {
     /// Returns an error if the amount is more precise than satoshis (i.e. if it
     /// has a milli-satoshi remainder). Otherwise, returns `Ok(())`.
     pub fn ensure_sats_precision(&self) -> anyhow::Result<()> {
-        if self.msats % 1000 != 0 {
+        if !self.msats.is_multiple_of(1000) {
             bail!("Amount is using a precision smaller than satoshi, cannot convert to satoshis");
         }
         Ok(())
@@ -199,6 +199,16 @@ impl std::ops::Add for Amount {
     fn add(self, rhs: Self) -> Self::Output {
         Self {
             msats: self.msats + rhs.msats,
+        }
+    }
+}
+
+impl std::ops::Sub for Amount {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self {
+            msats: self.msats - rhs.msats,
         }
     }
 }

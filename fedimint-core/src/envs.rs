@@ -18,6 +18,10 @@ pub const FM_USE_UNKNOWN_MODULE_ENV: &str = "FM_USE_UNKNOWN_MODULE";
 
 pub const FM_ENABLE_MODULE_LNV1_ENV: &str = "FM_ENABLE_MODULE_LNV1";
 pub const FM_ENABLE_MODULE_LNV2_ENV: &str = "FM_ENABLE_MODULE_LNV2";
+pub const FM_ENABLE_MODULE_MINT_ENV: &str = "FM_ENABLE_MODULE_MINT";
+pub const FM_ENABLE_MODULE_MINTV2_ENV: &str = "FM_ENABLE_MODULE_MINTV2";
+pub const FM_ENABLE_MODULE_WALLET_ENV: &str = "FM_ENABLE_MODULE_WALLET";
+pub const FM_ENABLE_MODULE_WALLETV2_ENV: &str = "FM_ENABLE_MODULE_WALLETV2";
 
 /// Disable mint base fees for testing and development environments
 pub const FM_DISABLE_BASE_FEES_ENV: &str = "FM_DISABLE_BASE_FEES";
@@ -140,6 +144,15 @@ pub const FM_IROH_PKARR_PUBLISHER_ENABLE_ENV: &str = "FM_IROH_PKARR_PUBLISHER_EN
 
 /// Env var to disable Iroh's use of relays
 pub const FM_IROH_RELAYS_ENABLE_ENV: &str = "FM_IROH_RELAYS_ENABLE";
+
+/// Env var to disable all pkarr publishing (enabled by default)
+pub const FM_PKARR_ENABLE_ENV: &str = "FM_PKARR_ENABLE";
+
+/// Env var to enable pkarr DHT publishing (disabled by default)
+pub const FM_PKARR_DHT_ENABLE_ENV: &str = "FM_PKARR_DHT_ENABLE";
+
+/// Env var to disable pkarr relay publishing (enabled by default)
+pub const FM_PKARR_RELAYS_ENABLE_ENV: &str = "FM_PKARR_RELAYS_ENABLE";
 
 /// Env var to override tcp api connectivity
 ///

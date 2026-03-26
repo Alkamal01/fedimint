@@ -220,16 +220,6 @@ async fn gateway_pay_valid_invoice(
 async fn test_gateway_client_pay_valid_invoice() -> anyhow::Result<()> {
     single_federation_test(
         |gateway, other_lightning_client, fed, user_client, _| async move {
-            gateway
-                .handle_set_fees_msg(SetFeesPayload {
-                    federation_id: Some(fed.id()),
-                    lightning_base: Some(Amount::ZERO),
-                    lightning_parts_per_million: Some(0),
-                    transaction_base: None,
-                    transaction_parts_per_million: None,
-                })
-                .await?;
-
             let gateway_client = gateway.select_client(fed.id()).await?.into_value();
             // Give user_client initial balance
             let dummy_module = user_client.get_first_module::<DummyClientModule>()?;
@@ -240,6 +230,15 @@ async fn test_gateway_client_pay_valid_invoice() -> anyhow::Result<()> {
 
             // Create test invoice
             let invoice = other_lightning_client.invoice(sats(250), None)?;
+            let gw_fee = gateway
+                .handle_get_info()
+                .await?
+                .federations
+                .first()
+                .expect("Only one federation")
+                .config
+                .lightning_fee;
+            let outgoing_fee = gw_fee.fee(250000);
 
             gateway_pay_valid_invoice(
                 invoice,
@@ -249,8 +248,18 @@ async fn test_gateway_client_pay_valid_invoice() -> anyhow::Result<()> {
             )
             .await?;
 
-            assert_eq!(user_client.get_balance_for_btc().await?, sats(1000 - 250));
-            assert_eq!(gateway_client.get_balance_for_btc().await?, sats(250));
+            assert_eq!(
+                user_client.get_balance_for_btc().await?,
+                sats(1000 - 250)
+                    .checked_sub(outgoing_fee)
+                    .expect("Should not be negative")
+            );
+            assert_eq!(
+                gateway_client.get_balance_for_btc().await?,
+                sats(250)
+                    .checked_add(outgoing_fee)
+                    .expect("Should not wrap around")
+            );
 
             Ok(())
         },
@@ -756,9 +765,8 @@ async fn test_gateway_client_intercept_htlc_invalid_offer() -> anyhow::Result<()
 #[tokio::test(flavor = "multi_thread")]
 async fn test_gateway_cannot_pay_expired_invoice() -> anyhow::Result<()> {
     single_federation_test(
-        |gateway, other_lightning_client, fed, user_client, _| async move {
+        |gateway, other_lightning_client, _fed, user_client, _| async move {
             let gateway_id = gateway.http_gateway_id().await;
-            let gateway_client = gateway.select_client(fed.id()).await?.into_value();
             let invoice = other_lightning_client
                 .invoice(sats(1000), 1.into())
                 .unwrap();
@@ -774,49 +782,19 @@ async fn test_gateway_cannot_pay_expired_invoice() -> anyhow::Result<()> {
                 .await?;
             assert_eq!(user_client.get_balance_for_btc().await?, sats(2000));
 
-            // User client pays test invoice
+            // User client attempts to pay the expired invoice — should be
+            // rejected immediately by the client-side expiry check.
             let lightning_module = user_client.get_first_module::<LightningClientModule>()?;
-            let gateway_module = lightning_module.select_gateway(&gateway_id).await;
-            let OutgoingLightningPayment {
-                payment_type,
-                contract_id,
-                fee: _,
-            } = user_pay_invoice(&lightning_module, invoice.clone(), &gateway_id).await?;
-            match payment_type {
-                PayType::Lightning(pay_op) => {
-                    let mut pay_sub = lightning_module
-                        .subscribe_ln_pay(pay_op)
-                        .await?
-                        .into_stream();
-                    assert_eq!(pay_sub.ok().await?, LnPayState::Created);
-                    let funded = pay_sub.ok().await?;
-                    assert_matches!(funded, LnPayState::Funded { .. });
+            let error = user_pay_invoice(&lightning_module, invoice.clone(), &gateway_id)
+                .await
+                .expect_err("Payment of expired invoice should fail");
+            assert!(
+                error.to_string().contains("Invoice has expired"),
+                "Expected 'Invoice has expired' error, got: {error}"
+            );
 
-                    let payload = PayInvoicePayload {
-                        federation_id: user_client.federation_id(),
-                        contract_id,
-                        payment_data: get_payment_data(gateway_module, invoice),
-                        preimage_auth: Hash::hash(&[0; 32]),
-                    };
-
-                    let gw_pay_op = gateway_client
-                        .get_first_module::<GatewayClientModule>()?
-                        .gateway_pay_bolt11_invoice(payload)
-                        .await?;
-                    let mut gw_pay_sub = gateway_client
-                        .get_first_module::<GatewayClientModule>()?
-                        .gateway_subscribe_ln_pay(gw_pay_op)
-                        .await?
-                        .into_stream();
-
-                    assert_eq!(gw_pay_sub.ok().await?, GatewayExtPayStates::Created);
-                    assert_matches!(gw_pay_sub.ok().await?, GatewayExtPayStates::Canceled { .. });
-                }
-                _ => panic!("Expected Lightning payment!"),
-            }
-
-            // Balance should be unchanged
-            assert_eq!(gateway_client.get_balance_for_btc().await?, sats(0));
+            // Balance should be unchanged since no contract was created
+            assert_eq!(user_client.get_balance_for_btc().await?, sats(2000));
 
             Ok(())
         },

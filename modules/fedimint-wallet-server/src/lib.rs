@@ -52,7 +52,10 @@ use fedimint_core::db::{
 };
 use fedimint_core::encoding::btc::NetworkLegacyEncodingWrapper;
 use fedimint_core::encoding::{Decodable, Encodable};
-use fedimint_core::envs::{BitcoinRpcConfig, is_rbf_withdrawal_enabled, is_running_in_test_env};
+use fedimint_core::envs::{
+    BitcoinRpcConfig, FM_ENABLE_MODULE_WALLET_ENV, is_env_var_set_opt, is_rbf_withdrawal_enabled,
+    is_running_in_test_env,
+};
 use fedimint_core::module::audit::Audit;
 use fedimint_core::module::{
     Amounts, ApiEndpoint, ApiError, ApiRequestErased, ApiVersion, CORE_CONSENSUS_VERSION,
@@ -285,7 +288,6 @@ fn default_finality_delay(network: Network) -> u32 {
     match network {
         Network::Bitcoin | Network::Regtest => 10,
         Network::Testnet | Network::Signet | Network::Testnet4 => 2,
-        _ => panic!("Unsupported network"),
     }
 }
 
@@ -300,7 +302,6 @@ fn default_client_bitcoin_rpc(network: Network) -> BitcoinRpcConfig {
             "http://127.0.0.1:{}/",
             std::env::var(FM_PORT_ESPLORA_ENV).unwrap_or_else(|_| String::from("50002"))
         ),
-        _ => panic!("Unsupported network"),
     };
 
     BitcoinRpcConfig {
@@ -326,6 +327,10 @@ impl ServerModuleInit for WalletInit {
             ),
             &[(0, 2)],
         )
+    }
+
+    fn is_enabled_by_default(&self) -> bool {
+        is_env_var_set_opt(FM_ENABLE_MODULE_WALLET_ENV).unwrap_or(true)
     }
 
     async fn init(&self, args: &ServerModuleInitArgs<Self>) -> anyhow::Result<Self::Module> {
@@ -1811,7 +1816,7 @@ impl Wallet {
         if let Err(e) = self
             .task_group
             .clone()
-            .shutdown_join_all(Some(Duration::from_secs(60)))
+            .shutdown_join_all(Some(Duration::from_mins(1)))
             .await
         {
             panic!("Error while shutting down fedimintd task group: {e}");
@@ -1942,7 +1947,7 @@ impl Wallet {
                     // Even in tests we don't want to spam the federation with requests about it
                     sleep(Duration::from_secs(5)).await;
                 } else {
-                    sleep(Duration::from_secs(600)).await;
+                    sleep(Duration::from_mins(10)).await;
                 }
             }
         });
@@ -1958,7 +1963,7 @@ pub async fn run_broadcast_pending_tx(
 ) {
     loop {
         // Unless something new happened, we broadcast once a minute
-        let _ = tokio::time::timeout(Duration::from_secs(60), broadcast.notified()).await;
+        let _ = tokio::time::timeout(Duration::from_mins(1), broadcast.notified()).await;
         broadcast_pending_tx(db.begin_transaction_nc().await, &rpc).await;
     }
 }

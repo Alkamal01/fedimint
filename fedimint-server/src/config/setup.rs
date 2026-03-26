@@ -67,6 +67,9 @@ pub struct LocalParams {
     /// Modules enabled by the leader (if None, all available modules are
     /// enabled)
     enabled_modules: Option<BTreeSet<ModuleKind>>,
+    /// Total number of guardians (including the one who sets this), set by the
+    /// leader
+    federation_size: Option<u32>,
 }
 
 impl LocalParams {
@@ -77,6 +80,7 @@ impl LocalParams {
             federation_name: self.federation_name.clone(),
             disable_base_fees: self.disable_base_fees,
             enabled_modules: self.enabled_modules.clone(),
+            federation_size: self.federation_size,
         }
     }
 }
@@ -123,6 +127,15 @@ impl ISetupApi for SetupApi {
             .map(|lp| base32::encode_prefixed(FEDIMINT_PREFIX, &lp.setup_code()))
     }
 
+    async fn guardian_name(&self) -> Option<String> {
+        self.state
+            .lock()
+            .await
+            .local_params
+            .as_ref()
+            .map(|lp| lp.name.clone())
+    }
+
     async fn auth(&self) -> Option<ApiAuth> {
         self.state
             .lock()
@@ -147,6 +160,10 @@ impl ISetupApi for SetupApi {
         self.settings.available_modules.clone()
     }
 
+    fn default_modules(&self) -> BTreeSet<ModuleKind> {
+        self.settings.default_modules.clone()
+    }
+
     async fn reset_setup_codes(&self) {
         self.state.lock().await.setup_codes.clear();
     }
@@ -158,13 +175,15 @@ impl ISetupApi for SetupApi {
         federation_name: Option<String>,
         disable_base_fees: Option<bool>,
         enabled_modules: Option<BTreeSet<ModuleKind>>,
+        federation_size: Option<u32>,
     ) -> anyhow::Result<String> {
         if let Some(existing_local_parameters) = self.state.lock().await.local_params.clone()
-            && existing_local_parameters.auth == auth
+            && existing_local_parameters.auth.as_str() == auth.as_str()
             && existing_local_parameters.name == name
             && existing_local_parameters.federation_name == federation_name
             && existing_local_parameters.disable_base_fees == disable_base_fees
             && existing_local_parameters.enabled_modules == enabled_modules
+            && existing_local_parameters.federation_size == federation_size
         {
             return Ok(base32::encode_prefixed(
                 FEDIMINT_PREFIX,
@@ -174,15 +193,29 @@ impl ISetupApi for SetupApi {
 
         ensure!(!name.is_empty(), "The guardian name is empty");
 
-        ensure!(!auth.0.is_empty(), "The password is empty");
+        ensure!(!auth.as_str().is_empty(), "The password is empty");
 
         ensure!(
-            auth.0.trim() == auth.0,
+            auth.as_str().trim() == auth.as_str(),
             "The password contains leading/trailing whitespace",
         );
 
         if let Some(federation_name) = federation_name.as_ref() {
             ensure!(!federation_name.is_empty(), "The federation name is empty");
+        }
+
+        if federation_name.is_some() {
+            ensure!(
+                federation_size.is_some(),
+                "The leader must set the federation size"
+            );
+        }
+
+        if let Some(size) = federation_size {
+            ensure!(
+                size == 1 || 4 <= size,
+                "Federation size must be 1 or at least 4"
+            );
         }
 
         let mut state = self.state.lock().await;
@@ -220,6 +253,7 @@ impl ISetupApi for SetupApi {
                 federation_name,
                 disable_base_fees,
                 enabled_modules,
+                federation_size,
             }
         } else {
             let (tls_cert, tls_key) =
@@ -248,6 +282,7 @@ impl ISetupApi for SetupApi {
                 federation_name,
                 disable_base_fees,
                 enabled_modules,
+                federation_size,
             }
         };
 
@@ -316,6 +351,18 @@ impl ISetupApi for SetupApi {
             );
         }
 
+        if let Some(federation_size) = state
+            .setup_codes
+            .iter()
+            .chain(once(&local_params.setup_code()))
+            .find_map(|info| info.federation_size)
+        {
+            ensure!(
+                info.federation_size.is_none(),
+                "Federation size has already been set to {federation_size}"
+            );
+        }
+
         state.setup_codes.insert(info.clone());
 
         Ok(info.name)
@@ -334,9 +381,21 @@ impl ISetupApi for SetupApi {
         state.setup_codes.insert(our_setup_code.clone());
 
         ensure!(
-            state.setup_codes.len() == 1 || state.setup_codes.len() >= 4,
+            state.setup_codes.len() == 1 || 4 <= state.setup_codes.len(),
             "The number of guardians is invalid"
         );
+
+        if let Some(federation_size) = state
+            .setup_codes
+            .iter()
+            .find_map(|info| info.federation_size)
+        {
+            ensure!(
+                state.setup_codes.len() == federation_size as usize,
+                "Expected {federation_size} guardians but got {}",
+                state.setup_codes.len()
+            );
+        }
 
         let federation_name = state
             .setup_codes
@@ -354,7 +413,7 @@ impl ISetupApi for SetupApi {
             .setup_codes
             .iter()
             .find_map(|info| info.enabled_modules.clone())
-            .unwrap_or_else(|| self.settings.available_modules.clone());
+            .unwrap_or_else(|| self.settings.default_modules.clone());
 
         let our_id = state
             .setup_codes
@@ -388,6 +447,46 @@ impl ISetupApi for SetupApi {
 
         Ok(())
     }
+
+    async fn federation_size(&self) -> Option<u32> {
+        let state = self.state.lock().await;
+        let local_setup_code = state.local_params.as_ref().map(LocalParams::setup_code);
+        state
+            .setup_codes
+            .iter()
+            .chain(local_setup_code.iter())
+            .find_map(|info| info.federation_size)
+    }
+
+    async fn cfg_federation_name(&self) -> Option<String> {
+        let state = self.state.lock().await;
+        let local_setup_code = state.local_params.as_ref().map(LocalParams::setup_code);
+        state
+            .setup_codes
+            .iter()
+            .chain(local_setup_code.iter())
+            .find_map(|info| info.federation_name.clone())
+    }
+
+    async fn cfg_base_fees_disabled(&self) -> Option<bool> {
+        let state = self.state.lock().await;
+        let local_setup_code = state.local_params.as_ref().map(LocalParams::setup_code);
+        state
+            .setup_codes
+            .iter()
+            .chain(local_setup_code.iter())
+            .find_map(|info| info.disable_base_fees)
+    }
+
+    async fn cfg_enabled_modules(&self) -> Option<BTreeSet<ModuleKind>> {
+        let state = self.state.lock().await;
+        let local_setup_code = state.local_params.as_ref().map(LocalParams::setup_code);
+        state
+            .setup_codes
+            .iter()
+            .chain(local_setup_code.iter())
+            .find_map(|info| info.enabled_modules.clone())
+    }
 }
 
 #[async_trait]
@@ -404,7 +503,7 @@ impl HasApiContext<SetupApi> for SetupApi {
         let is_authenticated = match self.state.lock().await.local_params {
             None => false,
             Some(ref params) => match request.auth.as_ref() {
-                Some(auth) => *auth == params.auth,
+                Some(auth) => params.auth.verify(auth.as_str()),
                 None => false,
             },
         };
@@ -432,7 +531,7 @@ pub fn server_endpoints() -> Vec<ApiEndpoint<SetupApi>> {
                     .request_auth()
                     .ok_or(ApiError::bad_request("Missing password".to_string()))?;
 
-                 config.set_local_parameters(auth, request.name, request.federation_name, request.disable_base_fees, request.enabled_modules)
+                 config.set_local_parameters(auth, request.name, request.federation_name, request.disable_base_fees, request.enabled_modules, request.federation_size)
                     .await
                     .map_err(|e| ApiError::bad_request(e.to_string()))
             }

@@ -37,14 +37,17 @@ fedimint-client = { workspace = true }
 fedimint-connectors = { workspace = true }
 fedimint-core = { workspace = true }
 fedimint-cursed-redb = { workspace = true }
+fedimint-derive-secret = { workspace = true }
 fedimint-eventlog = { workspace = true }
 fedimint-ln-client = { workspace = true, features = ["cli"] }
 fedimint-lnv2-client = { workspace = true, features = ["cli"] }
 fedimint-logging = { workspace = true }
 fedimint-meta-client = { workspace = true, features = ["cli"] }
 fedimint-mint-client = { workspace = true, features = ["cli"] }
+fedimint-mintv2-client = { workspace = true, features = ["cli"] }
 fedimint-rocksdb = { workspace = true }
 fedimint-wallet-client = { workspace = true, features = ["cli"] }
+fedimint-walletv2-client = { workspace = true, features = ["cli"] }
 fs-lock = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
